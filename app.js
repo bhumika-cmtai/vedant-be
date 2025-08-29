@@ -14,14 +14,14 @@ console.log(
 // ✅ CORS middleware (corrected and complete)
 app.use(
   cors({
-    origin: ["http://localhost:3000", "https://www.naraaglobal.com"],
+    origin: ["http://localhost:3000", "https://luv-kush-jewelry-fe.vercel.app"],
     credentials: true,
   })
 );
 
 // ✅ Handle preflight OPTIONS request for all routes
 app.options("*", cors({
-  origin: ["http://localhost:3000", "https://www.naraaglobal.com"],
+  origin: ["http://localhost:3000", "https://luv-kush-jewelry-fe.vercel.app"],
   credentials: true,
 }));
 
