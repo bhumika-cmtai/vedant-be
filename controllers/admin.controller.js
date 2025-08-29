@@ -325,6 +325,7 @@ const deleteProduct = asyncHandler(async (req, res) => {
 //GET ALL PRODUCTS
 const getAllProducts = asyncHandler(async (req, res) => {
   // --- 1. DESTRUCTURE QUERY PARAMS ---
+  // console.log("get all products reached")
   const {
     page = 1,
     limit = 10,
@@ -365,15 +366,18 @@ const getAllProducts = asyncHandler(async (req, res) => {
   // These are implicitly combined with an AND condition.
   // So, it will match the $or search AND these specific filters.
   if (type) query.type = type;
-  if (gender) query.gender = gender;
-  if (material) query.material = material;
-  if (jewelleryCategory) query.jewelleryCategory = jewelleryCategory;
-  if (materialType) query.materialType = materialType;
-  
-  // Filtering for array fields using $in is more precise for specific filters.
-  if (tags) query.tags = { $in: tags.split(',').map(tag => tag.trim()) };
-  if (color) query.color = { $in: color.split(',').map(c => c.trim()) };
-  if (stones) query.stones = { $in: stones.split(',').map(s => s.trim()) };
+if (gender) query.gender = gender;
+if (material) query.material = material;
+if (materialType) query.materialType = materialType;
+
+if (jewelleryCategory) {
+  query.jewelleryCategory = { $in: jewelleryCategory.split(',').map(c => c.trim()) };
+}
+
+if (tags) query.tags = { $in: tags.split(',').map(tag => tag.trim()) };
+if (color) query.color = { $in: color.split(',').map(c => c.trim()) };
+if (stones) query.stones = { $in: stones.split(',').map(s => s.trim()) };
+
 
   // --- 3. SETUP PAGINATION OPTIONS ---
   const pageNumber = parseInt(page, 10);
@@ -391,7 +395,7 @@ const getAllProducts = asyncHandler(async (req, res) => {
   if (products.length === 0 && totalProducts > 0) {
       throw new ApiError(404, "No products found on this page for the given criteria.");
   }
-  
+  // console.log("--products--")
   // --- 5. SEND THE PAGINATED RESPONSE ---
   return res.status(200).json(
     new ApiResponse(
@@ -409,38 +413,47 @@ const getAllProducts = asyncHandler(async (req, res) => {
 
 // GET ALL USERS 
 const getAllUsers = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, gender, search } = req.query;
+  // 1. Destructure query parameters. 'gender' is removed.
+  // The 'search' parameter from the frontend is received as 'name' in your fetchUsers thunk, 
+  // so we'll look for both 'search' and 'name' for flexibility.
+  const { page = 1, limit = 10, search, name } = req.query;
+  
+  // Use 'search' if provided, otherwise fallback to 'name'
+  const searchQuery = search || name;
 
   const query = {};
 
-  // Add gender filter if provided
-  if (gender && ['Male', 'Female', 'Other'].includes(gender)) {
-    query.gender = gender;
+  // 2. Add search functionality for fullName or email
+  // This now checks the 'fullName' field to match your frontend data model.
+  if (searchQuery) {
+    const searchRegex = { $regex: searchQuery, $options: "i" }; // "i" for case-insensitive
+    query.$or = [
+      { fullName: searchRegex }, 
+      { email: searchRegex }
+    ];
   }
 
-  // Add search functionality for name or email
-  if (search) {
-    const searchRegex = { $regex: search, $options: "i" };
-    query.$or = [{ name: searchRegex }, { email: searchRegex }];
-  }
-
+  // 3. Pagination logic (remains the same)
   const pageNumber = parseInt(page, 10);
   const limitNumber = parseInt(limit, 10);
   const skip = (pageNumber - 1) * limitNumber;
 
+  // 4. Database query using the constructed query object
   const users = await User.find(query)
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limitNumber)
     .select("-password -otp -refreshToken -forgotPasswordToken"); // Exclude sensitive fields
 
+  // 5. Get the total count of documents that match the query for pagination
   const totalUsers = await User.countDocuments(query);
-  // console.log(users)
+
+  // 6. Send the structured response
   return res.status(200).json(
     new ApiResponse(
       200,
       {
-        users,
+        users, // Frontend might expect a 'data' property
         currentPage: pageNumber,
         totalPages: Math.ceil(totalUsers / limitNumber),
         totalUsers,
@@ -449,6 +462,7 @@ const getAllUsers = asyncHandler(async (req, res) => {
     )
   );
 });
+
 
 const getUserById = asyncHandler(async (req, res) => {
   const { userId } = req.params;

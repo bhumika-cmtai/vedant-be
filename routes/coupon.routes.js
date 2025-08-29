@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
     createCoupon,
     getAllCoupons,
+    getCouponByCode,
     updateCoupon,
     deleteCoupon
 } from "../controllers/coupon.controller.js";
@@ -22,5 +23,7 @@ router.route("/")
 router.route("/:couponId")
     .patch(updateCoupon) // PATCH is suitable for partial updates
     .delete(deleteCoupon);
+
+router.route('/code/:code').get(getCouponByCode);
 
 export default router;

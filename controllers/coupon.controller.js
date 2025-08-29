@@ -64,6 +64,8 @@ const getAllCoupons = asyncHandler(async (req, res) => {
 });
 
 
+
+
 /**
  * @desc    Update a coupon (Admin)
  * @route   PATCH /api/v1/coupons/:couponId
@@ -127,9 +129,46 @@ const deleteCoupon = asyncHandler(async (req, res) => {
 });
 
 
+
+const getCouponByCode = asyncHandler(async (req, res) => {
+    // 1. Get the coupon code from the URL parameters
+    const { code } = req.params;
+
+    // 2. Validate that a code was provided
+    if (!code) {
+        throw new ApiError(400, "Coupon code is required in the URL.");
+    }
+
+    // 3. Find the coupon in the database
+    // The query uses a case-insensitive regular expression (`$regex` with `$options: 'i'`)
+    // to match the exact code (e.g., 'SUMMER25' will match 'summer25').
+    const coupon = await Coupon.findOne({ 
+        code: { $regex: `^${code}$`, $options: 'i' } 
+    });
+
+    // 4. If no coupon is found, return a 404 error
+    if (!coupon) {
+        throw new ApiError(404, `Coupon with code "${code}" not found.`);
+    }
+    
+    // 5. (Important) Check if the found coupon is active.
+    // This prevents users from applying expired or disabled coupons.
+    if (coupon.status !== 'active') {
+        throw new ApiError(403, "This coupon is not currently active.");
+    }
+
+    // 6. If the coupon is found and active, send a successful response
+    return res
+        .status(200)
+        .json(new ApiResponse(200, coupon, "Coupon fetched successfully."));
+});
+
+
+
 export {
     createCoupon,
     getAllCoupons,
     updateCoupon,
-    deleteCoupon
+    deleteCoupon,
+    getCouponByCode
 };

@@ -21,7 +21,7 @@ import { upload } from "../middlewares/multer.middleware.js";
 import { getProductById } from "../controllers/user.controller.js";
 
 const router = Router();
-
+console.log("admin router reached")
 // router.use(authMiddleware, adminMiddleware);
 
 router.route("/dashboard").get(getAdminDashboardStats);

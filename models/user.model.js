@@ -162,6 +162,4 @@ userSchema.methods.getForgotPasswordToken = function () {
   return resetToken;
 };
 
-// --- YEH LINE SABSE ZAROORI HAI ---
-// Isse User model doosri files mein import ho payega
 export const User = mongoose.model("User", userSchema);

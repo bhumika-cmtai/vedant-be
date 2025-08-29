@@ -1,7 +1,6 @@
+"user.routes"
 import { Router } from "express";
 import {
-  getUserDashboardStats,
-  getRecentUserOrders,
   getMyProfile,
   updateMyProfile,
   updateUserAvatar,
@@ -19,10 +18,8 @@ import {
   placeOrder,
   getMyOrders,
   getSingleOrder,
+  setDefaultAddress
 } from "../controllers/user.controller.js";
-// NOTE: Make sure the name of your auth middleware is correct.
-// In your controller, it's named 'protect'. Here it's 'authMiddleware'.
-// I will use 'authMiddleware' as defined in this file.
 import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
 
@@ -31,33 +28,28 @@ const router = Router();
 // This middleware requires the user to be authenticated for all subsequent routes.
 router.use(authMiddleware);
 
-// =================== FIX IS HERE ===================
-// Dashboard routes must match the frontend API calls exactly.
-router.route("/dashboard/stats").get(getUserDashboardStats); // Changed from "/dashboard-stats"
-router.route("/orders/recent").get(getRecentUserOrders); // Changed from "/recent-orders"
-// ===================================================
-
-// Profile
+// --- Profile Routes ---
 router.route("/profile").get(getMyProfile).patch(updateMyProfile);
-router
-  .route("/profile/avatar")
-  .patch(upload.single("avatar"), updateUserAvatar);
+router.route("/profile/avatar").patch(upload.single("avatar"), updateUserAvatar);
 
-// Address
+
+// --- Address Routes ---
 router.route("/address").get(getAddresses).post(addAddress);
 router.route("/address/:addressId").patch(updateAddress).delete(deleteAddress);
+router.route("/address/default/:addressId").patch(setDefaultAddress);
 
-// Wishlist
+// --- Wishlist Routes ---
 router.route("/wishlist").get(getWishlist).post(addToWishlist);
 router.route("/wishlist/:productId").delete(removeFromWishlist);
 
-// Cart
+// --- Cart Routes ---
 router.route("/cart").get(getCart).post(addToCart);
-router.route("/cart/:cartItemId").delete(removeFromCart);
-router.route("/cart/quantity/:productId").patch(updateCartQuantity);
+router.route("/cart/item/:cartItemId").delete(removeFromCart); // Use a more specific path
+router.route("/cart/item/quantity/:productId").patch(updateCartQuantity); // Use a more specific path
 
-// Orders
-router.route("/orders").get(getMyOrders).post(placeOrder);
-router.route("/orders/:orderId").get(getSingleOrder);
+// --- Order Routes ---
+router.route("/order").post(placeOrder); // For placing a new order
+router.route("/orders").get(getMyOrders); // For getting all orders
+router.route("/orders/:orderId").get(getSingleOrder); // For a single order
 
 export default router;
