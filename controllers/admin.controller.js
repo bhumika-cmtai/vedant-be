@@ -97,7 +97,7 @@ const createProduct = asyncHandler(async (req, res) => {
     materialType,
     size,
   } = req.body;
-
+  // console.log("--create product---")
   // --- 2. Basic Validation ---
   if (!name || !description || !price || !originalPrice || !stock || !type) {
     throw new ApiError(400, "Name, description, price, stock, and type are required fields.");
@@ -105,6 +105,7 @@ const createProduct = asyncHandler(async (req, res) => {
   if (!adminPackagingWeight || !adminPackagingDimension?.length || !adminPackagingDimension?.breadth || !adminPackagingDimension?.height) {
       throw new ApiError(400, "Admin packaging weight and dimensions (length, breadth, height) are required.");
   }
+  // console.log("--verification done---")
 
   // --- 3. Handle File Uploads ---
   const imageFiles = req.files?.images;
@@ -118,7 +119,7 @@ const createProduct = asyncHandler(async (req, res) => {
   const imageUploadPromises = imageFiles.map(file => uploadOnCloudinary(file.path));
   const uploadedImages = await Promise.all(imageUploadPromises);
   const imageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
-
+  // console.log("---image upload done---")
   if (imageUrls.length !== imageFiles.length) {
     throw new ApiError(500, "An error occurred while uploading one or more images.");
   }
@@ -134,6 +135,8 @@ const createProduct = asyncHandler(async (req, res) => {
   }
 
   // --- 4. Prepare Product Data for Database ---
+  // console.log("----imageUrl----", imageUrls)
+  // console.log("----videoUrl----", videoUrl)
   const productData = {
     name,
     slug: slugify(name, { lower: true, strict: true }),

@@ -1,16 +1,14 @@
-import multer from "multer";
-import fs from "fs";
-import path from "path";
+// In middlewares/multer.middleware.js
 
-// Ensure the temporary directory exists
-const tempDir = path.resolve("./public/temp");
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-}
+import multer from "multer";
+import path from "path";
+import os from "os"; // Using os.tmpdir() is a robust way to get the temp directory
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, tempDir);
+    // This will correctly resolve to /tmp on Vercel and the appropriate temp
+    // directory on your local machine.
+    cb(null, os.tmpdir());
   },
   filename: function (req, file, cb) {
     // Create a unique filename to avoid overwriting files
