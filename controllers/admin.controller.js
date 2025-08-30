@@ -325,11 +325,10 @@ const deleteProduct = asyncHandler(async (req, res) => {
 //GET ALL PRODUCTS
 const getAllProducts = asyncHandler(async (req, res) => {
   // --- 1. DESTRUCTURE QUERY PARAMS ---
-  // console.log("get all products reached")
   const {
     page = 1,
     limit = 10,
-    search, // The universal search term
+    search,
     type,
     gender,
     tags,
@@ -343,11 +342,9 @@ const getAllProducts = asyncHandler(async (req, res) => {
   // --- 2. BUILD THE DATABASE QUERY OBJECT DYNAMICALLY ---
   const query = {};
 
-  // Part A: Build the broad, multi-field search condition if a search term exists.
-  // This uses the $or operator to find a match in any of the specified fields.
+  // Part A: Broad multi-field search
   if (search) {
-    const searchRegex = { $regex: search, $options: "i" }; // Case-insensitive regex
-
+    const searchRegex = { $regex: search, $options: "i" };
     query.$or = [
       { name: searchRegex },
       { gender: searchRegex },
@@ -355,36 +352,44 @@ const getAllProducts = asyncHandler(async (req, res) => {
       { material: searchRegex },
       { jewelleryCategory: searchRegex },
       { materialType: searchRegex },
-      // For array fields, MongoDB automatically applies the regex to each element in the array.
       { stones: searchRegex },
       { color: searchRegex },
       { tags: searchRegex },
     ];
   }
 
-  // Part B: Add specific, narrowing filters.
-  // These are implicitly combined with an AND condition.
-  // So, it will match the $or search AND these specific filters.
+  // Part B: Specific narrowing filters (implicitly AND'ed)
   if (type) query.type = type;
-if (gender) query.gender = gender;
-if (material) query.material = material;
-if (materialType) query.materialType = materialType;
-
-if (jewelleryCategory) {
-  query.jewelleryCategory = { $in: jewelleryCategory.split(',').map(c => c.trim()) };
-}
-
-if (tags) query.tags = { $in: tags.split(',').map(tag => tag.trim()) };
-if (color) query.color = { $in: color.split(',').map(c => c.trim()) };
-if (stones) query.stones = { $in: stones.split(',').map(s => s.trim()) };
-
+  if (material) query.material = material;
+  if (materialType) query.materialType = materialType;
+  
+  // --- MODIFIED: Correctly handle comma-separated 'gender' values ---
+  if (gender) {
+    query.gender = { $in: gender.split(',').map(g => g.trim()) };
+  }
+  
+  // --- MODIFIED: Use $all for tags to enforce an AND condition ---
+  if (tags) {
+    query.tags = { $all: tags.split(',').map(tag => tag.trim()) };
+  }
+  
+  // These are correct for OR conditions
+  if (jewelleryCategory) {
+    query.jewelleryCategory = { $in: jewelleryCategory.split(',').map(c => c.trim()) };
+  }
+  if (color) {
+    query.color = { $in: color.split(',').map(c => c.trim()) };
+  }
+  if (stones) {
+    query.stones = { $in: stones.split(',').map(s => s.trim()) };
+  }
 
   // --- 3. SETUP PAGINATION OPTIONS ---
   const pageNumber = parseInt(page, 10);
   const limitNumber = parseInt(limit, 10);
   const skip = (pageNumber - 1) * limitNumber;
 
-  // --- 4. EXECUTE QUERY TO GET PRODUCTS AND TOTAL COUNT ---
+  // --- 4. EXECUTE QUERY ---
   const products = await Product.find(query)
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -395,7 +400,7 @@ if (stones) query.stones = { $in: stones.split(',').map(s => s.trim()) };
   if (products.length === 0 && totalProducts > 0) {
       throw new ApiError(404, "No products found on this page for the given criteria.");
   }
-  // console.log("--products--")
+
   // --- 5. SEND THE PAGINATED RESPONSE ---
   return res.status(200).json(
     new ApiResponse(
