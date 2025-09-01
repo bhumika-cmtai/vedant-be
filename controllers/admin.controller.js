@@ -62,7 +62,7 @@ const getSalesOverview = asyncHandler(async (req, res) => {
 
 const getRecentAdminOrders = asyncHandler(async (req, res) => {
   const recentOrders = await Order.find({})
-    .populate("user", "name")
+    .populate("user", "fullName")
     .sort({ createdAt: -1 })
     .limit(3)
     .select("user totalPrice orderStatus")
@@ -586,13 +586,55 @@ const getUserOrders = asyncHandler(async (req, res) => {
 
 
 const getAllAdminOrders = asyncHandler(async (req, res) => {
+  // --- PAGINATION LOGIC ---
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 10; // Show 10 orders per page
+  const skip = (page - 1) * limit;
+
+  // Get total count of orders for pagination info
+  const totalOrders = await Order.countDocuments();
+
   const orders = await Order.find({})
-    .populate("user", "name")
-    .sort({ createdAt: -1 });
+    .populate("user", "fullName") // Ensure you are populating fullName
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
   return res
     .status(200)
-    .json(new ApiResponse(200, orders, "All orders fetched"));
+    .json(new ApiResponse(200, {
+      orders,
+      currentPage: page,
+      totalPages: Math.ceil(totalOrders / limit),
+      totalOrders,
+    }, "All orders fetched"));
 });
+
+const getSingleAdminOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+
+  // 1. Validate the Order ID format
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      throw new ApiError(400, "Invalid Order ID format.");
+  }
+  
+  // 2. Find the order by its ID
+  //    - Does NOT check for user ownership, allowing admin access to any order.
+  const order = await Order.findById(orderId)
+      .populate("user", "fullName email") // Get customer's name and email
+      .populate("orderItems.product", "name images price"); // Get details for each product in the order
+
+      console.log("--order--")
+      console.log(order)
+
+  // 3. If no order is found, throw a 404 error
+  if (!order) {
+      throw new ApiError(404, "Order not found.");
+  }
+
+  // 4. Send a successful response with the order data
+  res.status(200).json(new ApiResponse(200, order, "Order details fetched successfully for admin."));
+})
 
 const updateOrderStatus = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
@@ -622,6 +664,8 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, order, "Order status updated successfully"));
 });
 
+
+
 export {
   getAdminDashboardStats,
   getSalesOverview,
@@ -632,6 +676,7 @@ export {
   getAllProducts,
   getAllUsers,
   // getUserDetails,
+  getSingleAdminOrder,
   getUserById,
   updateUser,
   deleteUser,

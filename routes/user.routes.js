@@ -18,7 +18,8 @@ import {
   placeOrder,
   getMyOrders,
   getSingleOrder,
-  setDefaultAddress
+  setDefaultAddress,
+  placeCodOrder
 } from "../controllers/user.controller.js";
 import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
@@ -48,8 +49,10 @@ router.route("/cart/item/:cartItemId").delete(removeFromCart); // Use a more spe
 router.route("/cart/item/quantity/:productId").patch(updateCartQuantity); // Use a more specific path
 
 // --- Order Routes ---
-router.route("/order").post(placeOrder); // For placing a new order
-router.route("/orders").get(getMyOrders); // For getting all orders
-router.route("/orders/:orderId").get(getSingleOrder); // For a single order
+// --- Order Routes ---
+router.route("/order/cod").post(placeCodOrder); // COD order place karne ke liye
+router.route("/orders").get(getMyOrders);       // User ke saare orders laane ke liye
+router.route("/orders/:orderId").get(getSingleOrder); // User ka ek specific order laane ke liye
+
 
 export default router;

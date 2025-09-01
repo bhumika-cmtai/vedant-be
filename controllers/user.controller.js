@@ -1,4 +1,4 @@
-"user.controller"
+// "user.controller"
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -335,9 +335,80 @@ const placeOrder = asyncHandler(async (req, res) => {
     res.status(201).json(new ApiResponse(201, newOrder, "Order placed successfully!"));
 });
 
+ const placeCodOrder = asyncHandler(async (req, res) => {
+  const { addressId } = req.body;
+  if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+      const user = await User.findById(req.user._id)
+          .populate("cart.product", "name price stock")
+          .session(session);
+      if (!user?.cart?.length) throw new ApiError(400, "Your cart is empty.");
+
+      const shippingAddress = user.addresses.id(addressId);
+      if (!shippingAddress) throw new ApiError(404, "Shipping address not found.");
+
+      let subtotal = 0;
+      const orderItems = [];
+      const stockUpdates = [];
+
+      for (const item of user.cart) {
+          if (item.product.stock < item.quantity) {
+              throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
+          }
+          subtotal += item.product.price * item.quantity;
+          orderItems.push({
+              name: item.product.name,
+              product: item.product._id,
+              quantity: item.quantity,
+              price: item.product.price,
+          });
+          stockUpdates.push({
+              updateOne: {
+                  filter: { _id: item.product._id },
+                  update: { $inc: { stock: -item.quantity } },
+              },
+          });
+      }
+      
+      // Simplified shipping and total calculation
+      const shippingCharge = subtotal > 2000 ? 0 : 99; // Same rule as Razorpay
+      const finalTotalPrice = subtotal + shippingCharge;
+
+      const [newOrder] = await Order.create([{
+          user: req.user._id,
+          orderItems,
+          shippingAddress: shippingAddress.toObject(),
+          itemsPrice: subtotal,
+          shippingPrice: shippingCharge,
+          taxPrice: 0, // Simplified
+          totalPrice: finalTotalPrice,
+          paymentMethod: "COD",
+          orderStatus: "Processing",
+      }], { session });
+
+      await Product.bulkWrite(stockUpdates, { session });
+      user.cart = [];
+      await user.save({ session, validateBeforeSave: false });
+
+      await session.commitTransaction();
+      res.status(201).json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));
+  
+  } catch (error) {
+      await session.abortTransaction();
+      throw error;
+  } finally {
+      session.endSession();
+  }
+});
+
+
 const getMyOrders = asyncHandler(async (req, res) => {
     const orders = await Order.find({ user: req.user._id })
-        .populate("orderItems.product", "name mainImage")
+        .populate("orderItems.product", "name images")
         .sort({ createdAt: -1 }).lean();
     res.status(200).json(new ApiResponse(200, orders, "All user orders fetched"));
 });
@@ -345,7 +416,7 @@ const getMyOrders = asyncHandler(async (req, res) => {
 const getSingleOrder = asyncHandler(async (req, res) => {
     const { orderId } = req.params;
     const order = await Order.findOne({ _id: orderId, user: req.user._id })
-        .populate("orderItems.product", "name mainImage price").lean();
+        .populate("orderItems.product", "name images price").lean();
     if (!order) throw new ApiError(404, "Order not found.");
     res.status(200).json(new ApiResponse(200, order, "Order detail fetched successfully"));
 });
@@ -437,5 +508,6 @@ export {
     placeOrder,
     getMyOrders,
     getSingleOrder,
+    placeCodOrder,
     getProductsWithVideos
 };

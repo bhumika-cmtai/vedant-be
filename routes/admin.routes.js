@@ -14,11 +14,13 @@ import {
   deleteUser,
   getUserOrders,
   getAllAdminOrders,
+  getSingleAdminOrder
 } from "../controllers/admin.controller.js";
 import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { adminMiddleware } from "../middlewares/admin.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
 import { getProductById } from "../controllers/user.controller.js";
+
 
 const router = Router();
 console.log("admin router reached")
@@ -76,5 +78,8 @@ router
     .put(updateUser) // No multer needed as we're not uploading files
     .delete(deleteUser);
 router.route("/users/:userId/orders").get(getUserOrders);
+
+router.route("/orders/:orderId").get(getSingleAdminOrder);
+
 
 export default router;
