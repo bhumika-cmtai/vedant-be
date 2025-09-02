@@ -8,6 +8,9 @@ import { Product } from "../models/product.model.js";
 import { uploadOnCloudinary, deleteFromCloudinary, getPublicIdFromUrl } from "../config/cloudinary.js";
 import fs from "fs";
 import mongoose from "mongoose";
+import { uploadOnS3, deleteFromS3, getObjectKeyFromUrl } from "../config/s3.js";
+import { sendOrderConfirmationEmail } from "../services/emailService.js";
+import { Coupon } from "../models/coupon.model.js";
 
 const getMyProfile = asyncHandler(async (req, res) => {
   const userProfile = await User.findById(req.user._id)
@@ -76,40 +79,35 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Avatar file is missing");
   }
 
-  try {
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      throw new ApiError(404, "User not found");
-    }
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    if (fs.existsSync(avatarLocalPath)) fs.unlinkSync(avatarLocalPath);
+    throw new ApiError(404, "User not found");
+  }
 
-    // --- IMPROVED: Delete the old avatar from Cloudinary before uploading a new one ---
-    if (user.avatar) {
-      const oldPublicId = getPublicIdFromUrl(user.avatar);
-      if (oldPublicId) {
-        await deleteFromCloudinary(oldPublicId);
-      }
-    }
-
-    const avatar = await uploadOnCloudinary(avatarLocalPath);
-    if (!avatar?.url) {
-      throw new ApiError(500, "Error while uploading avatar to Cloudinary");
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user._id,
-      { $set: { avatar: avatar.url } },
-      { new: true }
-    ).select("-password -refreshToken");
-
-    res
-      .status(200)
-      .json(new ApiResponse(200, updatedUser, "Avatar updated successfully"));
-  } finally {
-    // Ensure the local file is deleted after processing
-    if (fs.existsSync(avatarLocalPath)) {
-      fs.unlinkSync(avatarLocalPath);
+  // --- BEHTAR: Naya avatar upload karne se pehle purana S3 se delete karein ---
+  if (user.avatar) {
+    const oldObjectKey = getObjectKeyFromUrl(user.avatar);
+    if (oldObjectKey) {
+      await deleteFromS3(oldObjectKey);
     }
   }
+
+  // --- बदला हुआ: uploadOnS3 ka istemaal karein ---
+  const avatar = await uploadOnS3(avatarLocalPath, "avatars"); // Avatars ko organize karne ke liye folder
+  if (!avatar?.url) {
+    throw new ApiError(500, "Error while uploading avatar to S3");
+  }
+
+  const updatedUser = await User.findByIdAndUpdate(
+    req.user._id,
+    { $set: { avatar: avatar.url } },
+    { new: true }
+  ).select("-password -refreshToken");
+
+  res
+    .status(200)
+    .json(new ApiResponse(200, updatedUser, "Avatar updated successfully"));
 });
 
 const getAddresses = asyncHandler(async (req, res) => {
@@ -335,90 +333,202 @@ const placeOrder = asyncHandler(async (req, res) => {
     res.status(201).json(new ApiResponse(201, newOrder, "Order placed successfully!"));
 });
 
- const placeCodOrder = asyncHandler(async (req, res) => {
-  const { addressId } = req.body;
-  if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
+const placeCodOrder = asyncHandler(async (req, res) => {
+  // 1. Destructure addressId and couponCode from the request body
+  const { addressId, couponCode } = req.body;
+  if (!addressId) {
+    throw new ApiError(400, "Shipping address ID is required.");
+  }
 
+  // 2. Start a database transaction for data consistency
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-      const user = await User.findById(req.user._id)
-          .populate("cart.product", "name price stock")
-          .session(session);
-      if (!user?.cart?.length) throw new ApiError(400, "Your cart is empty.");
+    // 3. Find the user and populate their cart with necessary product details
+    const user = await User.findById(req.user._id)
+      .populate("cart.product", "name price stock images") // <-- Crucially includes 'images'
+      .session(session);
 
-      const shippingAddress = user.addresses.id(addressId);
-      if (!shippingAddress) throw new ApiError(404, "Shipping address not found.");
+    if (!user?.cart?.length) {
+      throw new ApiError(400, "Your cart is empty.");
+    }
 
-      let subtotal = 0;
-      const orderItems = [];
-      const stockUpdates = [];
+    // 4. Find the selected shipping address from the user's addresses
+    const shippingAddress = user.addresses.id(addressId);
+    if (!shippingAddress) {
+      throw new ApiError(404, "Shipping address not found.");
+    }
 
-      for (const item of user.cart) {
-          if (item.product.stock < item.quantity) {
-              throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
-          }
-          subtotal += item.product.price * item.quantity;
-          orderItems.push({
-              name: item.product.name,
-              product: item.product._id,
-              quantity: item.quantity,
-              price: item.product.price,
-          });
-          stockUpdates.push({
-              updateOne: {
-                  filter: { _id: item.product._id },
-                  update: { $inc: { stock: -item.quantity } },
-              },
-          });
+    // 5. Initialize variables for order creation
+    let subtotal = 0;
+    const orderItems = [];
+    const stockUpdates = [];
+
+    // 6. Loop through each item in the cart to validate and prepare it for the order
+    for (const item of user.cart) {
+      // --- THE MOST IMPORTANT FIX ---
+      // If a product in the cart was deleted, `item.product` will be null.
+      // We must check for this to prevent errors and creating empty orders.
+      if (!item.product) {
+        throw new ApiError(
+          404,
+          `A product in your cart is no longer available. Please remove it and try again.`
+        );
       }
-      
-      // Simplified shipping and total calculation
-      const shippingCharge = subtotal > 2000 ? 0 : 99; // Same rule as Razorpay
-      const finalTotalPrice = subtotal + shippingCharge;
 
-      const [newOrder] = await Order.create([{
+      // Check if there is enough stock
+      if (item.product.stock < item.quantity) {
+        throw new ApiError(
+          400,
+          `Not enough stock for "${item.product.name}". Only ${item.product.stock} left.`
+        );
+      }
+
+      // Add to subtotal
+      subtotal += item.product.price * item.quantity;
+
+      // Create a clean order item object, including the image
+      orderItems.push({
+        name: item.product.name,
+        product: item.product._id,
+        quantity: item.quantity,
+        price: item.product.price,
+        image: item.product.images[0], // Saves the first image of the product
+      });
+
+      // Prepare the stock reduction operation
+      stockUpdates.push({
+        updateOne: {
+          filter: { _id: item.product._id },
+          update: { $inc: { stock: -item.quantity } },
+        },
+      });
+    }
+
+    // After the loop, ensure that we actually have items to order
+    if (orderItems.length === 0) {
+      throw new ApiError(400, "No valid items found in the cart to place an order.");
+    }
+
+    // 7. Handle coupon logic
+    let discountAmount = 0;
+    let validatedCouponCode = null;
+    if (couponCode) {
+      const coupon = await Coupon.findOne({
+        code: couponCode.toUpperCase(),
+        status: "active",
+      }).session(session);
+
+      if (coupon) {
+        discountAmount = (subtotal * coupon.discountPercentage) / 100;
+        validatedCouponCode = coupon.code;
+      } else {
+        throw new ApiError(404, "Invalid or inactive coupon code.");
+      }
+    }
+
+    // 8. Calculate final total
+    const shippingCharge = subtotal > 2000 ? 0 : 99; // Example shipping rule
+    const finalTotalPrice = subtotal + shippingCharge - discountAmount;
+
+    // 9. Create the new order in the database
+    const [newOrder] = await Order.create(
+      [
+        {
           user: req.user._id,
-          orderItems,
+          orderItems, // This now contains all correct product details
           shippingAddress: shippingAddress.toObject(),
           itemsPrice: subtotal,
           shippingPrice: shippingCharge,
-          taxPrice: 0, // Simplified
+          taxPrice: 0,
+          discountAmount,
+          couponCode: validatedCouponCode,
           totalPrice: finalTotalPrice,
           paymentMethod: "COD",
           orderStatus: "Processing",
-      }], { session });
+        },
+      ],
+      { session }
+    );
 
-      await Product.bulkWrite(stockUpdates, { session });
-      user.cart = [];
-      await user.save({ session, validateBeforeSave: false });
+    // 10. Update product stock and clear the user's cart
+    await Product.bulkWrite(stockUpdates, { session });
+    user.cart = [];
+    await user.save({ session, validateBeforeSave: false });
 
-      await session.commitTransaction();
-      res.status(201).json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));
-  
+    // 11. If all steps succeeded, commit the transaction
+    await session.commitTransaction();
+
+    // 12. Send the confirmation email (asynchronously)
+    if (user.email) {
+      sendOrderConfirmationEmail(user.email, newOrder).catch((err) =>
+        console.error("Failed to send COD confirmation email:", err.message)
+      );
+    }
+
+    // 13. Send the final success response to the client
+    res
+      .status(201)
+      .json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));
   } catch (error) {
-      await session.abortTransaction();
-      throw error;
+    // If any error occurred, abort the transaction to undo all changes
+    await session.abortTransaction();
+    throw error; // Pass the error to the global error handler
   } finally {
-      session.endSession();
+    // Always end the session to release resources
+    session.endSession();
   }
 });
 
 
+
 const getMyOrders = asyncHandler(async (req, res) => {
-    const orders = await Order.find({ user: req.user._id })
-        .populate("orderItems.product", "name images")
-        .sort({ createdAt: -1 }).lean();
-    res.status(200).json(new ApiResponse(200, orders, "All user orders fetched"));
+  // 1. Get page and limit from query parameters, with default values
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 5; // Default to 5 orders per page
+  const skip = (page - 1) * limit;
+
+  // 2. Create the query to find orders for the currently logged-in user
+  const query = { user: req.user._id };
+
+  // 3. Fetch the total count of matching documents for pagination metadata
+  //    We run this query in parallel with the main query for efficiency.
+  const totalOrdersPromise = Order.countDocuments(query);
+
+  // 4. Fetch the actual orders for the current page
+  const ordersPromise = Order.find(query)
+      .populate("orderItems.product", "name images") // Populate product details
+      .sort({ createdAt: -1 }) // Show the newest orders first
+      .skip(skip) // Skip documents for previous pages
+      .limit(limit) // Limit the number of documents to the page size
+      .lean();
+
+  // 5. Execute both promises at the same time
+  const [totalOrders, orders] = await Promise.all([
+    totalOrdersPromise,
+    ordersPromise,
+  ]);
+  
+  // 6. Send the paginated response
+  res.status(200).json(new ApiResponse(200, {
+      orders,
+      currentPage: page,
+      totalPages: Math.ceil(totalOrders / limit),
+      totalOrders,
+  }, "All user orders fetched successfully"));
 });
 
 const getSingleOrder = asyncHandler(async (req, res) => {
-    const { orderId } = req.params;
-    const order = await Order.findOne({ _id: orderId, user: req.user._id })
-        .populate("orderItems.product", "name images price").lean();
-    if (!order) throw new ApiError(404, "Order not found.");
-    res.status(200).json(new ApiResponse(200, order, "Order detail fetched successfully"));
+  const { orderId } = req.params;
+  const order = await Order.findOne({ _id: orderId, user: req.user._id })
+      .populate("orderItems.product", "name images price")
+      .lean();
+      
+  if (!order) {
+      throw new ApiError(404, "Order not found.");
+  }
+  res.status(200).json(new ApiResponse(200, order, "Order detail fetched successfully"));
 });
 
 //GET PRODUCT 

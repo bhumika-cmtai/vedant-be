@@ -5,6 +5,7 @@ import { Order } from "../models/order.model.js";
 import { User } from "../models/user.model.js";
 import { Product } from "../models/product.model.js";
 import { deleteFromCloudinary, getPublicIdFromUrl, uploadOnCloudinary } from "../config/cloudinary.js";
+import { uploadOnS3, deleteFromS3, getObjectKeyFromUrl } from "../config/s3.js";
 import mongoose from "mongoose";
 import slugify from "slugify";
 
@@ -105,8 +106,8 @@ const createProduct = asyncHandler(async (req, res) => {
   if (!adminPackagingWeight || !adminPackagingDimension?.length || !adminPackagingDimension?.breadth || !adminPackagingDimension?.height) {
       throw new ApiError(400, "Admin packaging weight and dimensions (length, breadth, height) are required.");
   }
-  // console.log("--verification done---")
 
+  console.log("yahan tk phuch gye")
   // --- 3. Handle File Uploads ---
   const imageFiles = req.files?.images;
   const videoFile = req.files?.video?.[0];
@@ -115,24 +116,24 @@ const createProduct = asyncHandler(async (req, res) => {
     throw new ApiError(400, "At least one product image is required.");
   }
 
-  // Upload images to Cloudinary in parallel for efficiency
-  const imageUploadPromises = imageFiles.map(file => uploadOnCloudinary(file.path));
+  const imageUploadPromises = imageFiles.map(file => uploadOnS3(file.path, "products"));
   const uploadedImages = await Promise.all(imageUploadPromises);
   const imageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
-  // console.log("---image upload done---")
+
   if (imageUrls.length !== imageFiles.length) {
     throw new ApiError(500, "An error occurred while uploading one or more images.");
   }
 
-  // Upload video if it exists
   let videoUrl = null;
   if (videoFile) {
-    const videoUploadResult = await uploadOnCloudinary(videoFile.path);
+    // --- बदला हुआ: Video ke liye uploadOnS3 ka istemaal karein ---
+    const videoUploadResult = await uploadOnS3(videoFile.path, "products");
     if (!videoUploadResult?.url) {
       throw new ApiError(500, "Failed to upload video.");
     }
     videoUrl = videoUploadResult.url;
   }
+  console.log("this is video url", videoUrl);
 
   // --- 4. Prepare Product Data for Database ---
   // console.log("----imageUrl----", imageUrls)
@@ -172,6 +173,7 @@ const createProduct = asyncHandler(async (req, res) => {
 
   // --- 6. Create Product in DB ---
   const product = await Product.create(productData);
+  console.log("this is product", product);
 
   if (!product) {
     throw new ApiError(500, "Something went wrong while creating the product.");
@@ -235,7 +237,6 @@ const updateProduct = asyncHandler(async (req, res) => {
     };
   }
 
-  // Handle type-specific fields
   if (type === 'jewellery') {
     if (dimensions !== undefined) updateData.dimensions = dimensions;
     if (stones !== undefined) updateData.stones = String(stones).split(',').map(s => s.trim());
@@ -245,28 +246,27 @@ const updateProduct = asyncHandler(async (req, res) => {
     if (size !== undefined) updateData.size = String(size).split(',').map(s => s.trim());
   }
 
-  // --- 4. HANDLE FILE UPLOADS (Unchanged) ---
   const imageFiles = req.files?.images;
   if (imageFiles && imageFiles.length > 0) {
-    // Your existing file handling logic is correct.
-    const uploadedImages = await Promise.all(imageFiles.map(file => uploadOnCloudinary(file.path)));
+    const uploadedImages = await Promise.all(imageFiles.map(file => uploadOnS3(file.path, "products")));
     const newImageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
     if (newImageUrls.length > 0) {
-      await Promise.all(product.images.map(getPublicIdFromUrl).map(id => deleteFromCloudinary(id, "image")));
+      await Promise.all(product.images.map(getObjectKeyFromUrl).map(key => deleteFromS3(key)));
       updateData.images = newImageUrls;
     }
   }
 
   const videoFile = req.files?.video?.[0];
   if (videoFile) {
-    const videoUploadResult = await uploadOnCloudinary(videoFile.path);
+    const videoUploadResult = await uploadOnS3(videoFile.path, "products");
     if (videoUploadResult?.url) {
       if (product.video && product.video.length > 0) {
-        await deleteFromCloudinary(getPublicIdFromUrl(product.video[0]), "video");
+        await deleteFromS3(getObjectKeyFromUrl(product.video[0]));
       }
       updateData.video = [videoUploadResult.url];
     }
   }
+
 
   // --- 5. EXECUTE THE UPDATE ---
   const updatedProduct = await Product.findByIdAndUpdate(
@@ -290,32 +290,28 @@ const deleteProduct = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Invalid product ID format.");
     }
     
-    // --- 1. Find the product to get its file URLs before deleting ---
     const product = await Product.findById(productId);
     if (!product) {
       throw new ApiError(404, "Product not found.");
     }
     console.log("this is product",product)
     
-    // --- 2. Collect all public IDs of associated Cloudinary assets ---
     const assetsToDelete = [];
-    // console.log(assetsToDelete)
-    if (product.images && product.images.length > 0) {
-      product.images.forEach(url => assetsToDelete.push({ publicId: getPublicIdFromUrl(url), type: "image" }));
-    }
-    if (product.video && product.video.length > 0) {
-      product.video.forEach(url => assetsToDelete.push({ publicId: getPublicIdFromUrl(url), type: "video" }));
-    }
-    console.log(assetsToDelete)
-    // --- 3. Delete from Cloudinary and Database in parallel ---
-    const cloudinaryDeletionPromises = assetsToDelete.map(asset => deleteFromCloudinary(asset.publicId, asset.type));
-    const dbDeletionPromise = Product.findByIdAndDelete(productId);
+  if (product.images && product.images.length > 0) {
+    product.images.forEach(url => assetsToDelete.push(getObjectKeyFromUrl(url)));
+  }
+  if (product.video && product.video.length > 0) {
+    product.video.forEach(url => assetsToDelete.push(getObjectKeyFromUrl(url)));
+  }
+  
+  const s3DeletionPromises = assetsToDelete.map(key => deleteFromS3(key));
+  const dbDeletionPromise = Product.findByIdAndDelete(productId);
     
-    await Promise.all([
-      ...cloudinaryDeletionPromises,
-      dbDeletionPromise
-    ]);
-    
+  await Promise.all([
+    ...s3DeletionPromises,
+    dbDeletionPromise
+  ]);
+
     return res
     .status(200)
     .json(new ApiResponse(200, {}, "Product deleted successfully."));

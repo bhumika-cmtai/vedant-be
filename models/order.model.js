@@ -33,6 +33,8 @@ const orderSchema = new mongoose.Schema(
     itemsPrice: { type: Number, required: true },
     shippingPrice: { type: Number, required: true },
     taxPrice: { type: Number, required: true },
+    discountAmount: { type: Number, default: 0 }, 
+    couponCode: { type: String }, 
     totalPrice: { type: Number, required: true },
     orderStatus: {
       type: String,

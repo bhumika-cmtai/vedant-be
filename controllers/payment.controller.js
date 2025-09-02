@@ -9,6 +9,8 @@ import { ApiError } from "../utils/ApiError.js";
 import { Order } from "../models/order.model.js";
 import { User } from "../models/user.model.js";
 import { Product } from "../models/product.model.js";
+import { Coupon } from "../models/coupon.model.js";
+import { sendOrderConfirmationEmail } from "../services/emailService.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -38,7 +40,8 @@ const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
 
 // API Controllers
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
-  const { addressId, amount: frontendTotalAmount } = req.body;
+  // Add couponCode to the request body
+  const { addressId, amount: frontendTotalAmount, couponCode } = req.body;
   console.log("this is create order ")
   if (!addressId || !frontendTotalAmount) {
     throw new ApiError(400, "Address ID and amount are required.");
@@ -56,7 +59,6 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Selected shipping address not found.");
   }
 
-  // --- SIMPLIFIED PRICE CALCULATION ---
   let backendSubtotal = 0;
   for (const item of user.cart) {
     if (!item.product || item.product.stock < item.quantity) {
@@ -65,19 +67,31 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     backendSubtotal += item.product.price * item.quantity;
   }
 
+  // --- NEW: Coupon Validation Logic ---
+  let discountAmount = 0;
+  if (couponCode) {
+    const coupon = await Coupon.findOne({
+      code: couponCode.toUpperCase(),
+      status: "active",
+    });
 
-  // Set a fixed shipping charge or a simple rule (e.g., free above a certain amount)
-  const shippingCharge = backendSubtotal > 2000 ? 0 : 99; // Example rule
-  const backendTotalAmount = backendSubtotal + shippingCharge;
-  
+    if (!coupon) {
+      throw new ApiError(404, "Invalid or inactive coupon code.");
+    }
+    // Calculate discount from the percentage
+    discountAmount = (backendSubtotal * coupon.discountPercentage) / 100;
+  }
+
+  const shippingCharge = backendSubtotal > 2000 ? 0 : 99;
+  // Apply the discount to the final amount
+  const backendTotalAmount = backendSubtotal + shippingCharge - discountAmount;
+
   if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1) {
     throw new ApiError(400, "Price mismatch. Please refresh and try again.");
   }
-  console.log(process.env.RAZORPAY_KEY_ID)
-  console.log(process.env.RAZORPAY_KEY_SECRET)
-
+  
   const razorpayOrder = await razorpay.orders.create({
-    amount: Math.round(backendTotalAmount * 100),
+    amount: Math.round(backendTotalAmount * 100), // Use the discounted amount
     currency: "INR",
     receipt: crypto.randomBytes(10).toString("hex"),
   });
@@ -94,14 +108,28 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   }, "Razorpay order created."));
 });
 
-
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId } = req.body;
-  
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !addressId) {
-    throw new ApiError(400, "Missing payment details.");
+  // Destructure all required fields from the request body, including the couponCode
+  const {
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    addressId,
+    couponCode, // Receive the coupon code from the frontend
+  } = req.body;
+
+  // 1. --- Initial Validation ---
+  if (
+    !razorpay_order_id ||
+    !razorpay_payment_id ||
+    !razorpay_signature ||
+    !addressId
+  ) {
+    throw new ApiError(400, "Missing required payment or address details.");
   }
 
+  // 2. --- Verify Payment Signature ---
+  // This is a critical security step to ensure the payment response is genuinely from Razorpay.
   const sign = `${razorpay_order_id}|${razorpay_payment_id}`;
   const expectedSign = crypto
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -112,74 +140,140 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid payment signature. Transaction failed.");
   }
 
+  // 3. --- Start Database Transaction ---
+  // A transaction ensures that all database operations (creating order, updating stock, clearing cart)
+  // either succeed together or fail together, preventing data inconsistency.
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
+    // 4. --- Fetch User and Cart Data within the Transaction ---
     const user = await User.findById(req.user._id)
       .populate({ path: "cart.product", select: "name price stock" })
       .populate("addresses")
-      .session(session);
+      .session(session); // Ensure this operation is part of the transaction
 
     if (!user) throw new ApiError(404, "User not found.");
-    const selectedAddress = user.addresses.id(addressId);
-    if (!selectedAddress) throw new ApiError(404, "Selected address not found.");
+    if (!user.cart?.length) {
+      throw new ApiError(400, "Cannot place order with an empty cart.");
+    }
 
+    const selectedAddress = user.addresses.id(addressId);
+    if (!selectedAddress) {
+      throw new ApiError(404, "Selected address not found in your profile.");
+    }
+
+    // 5. --- Prepare Order Details and Calculate Subtotal ---
     let subtotal = 0;
-    const items = [];
-    const stockOps = [];
+    const orderItems = [];
+    const stockUpdateOperations = [];
+
     for (const item of user.cart) {
       if (!item.product || item.product.stock < item.quantity) {
-        throw new ApiError(400, `Item "${item.product?.name}" is out of stock.`);
+        throw new ApiError(
+          400,
+          `Item "${item.product?.name}" is out of stock. Please remove it from your cart.`
+        );
       }
       subtotal += item.product.price * item.quantity;
-      items.push({
+      orderItems.push({
         product: item.product._id,
         name: item.product.name,
         quantity: item.quantity,
         price: item.product.price,
       });
-      stockOps.push({
-        updateOne: { filter: { _id: item.product._id }, update: { $inc: { stock: -item.quantity } } },
+      stockUpdateOperations.push({
+        updateOne: {
+          filter: { _id: item.product._id },
+          update: { $inc: { stock: -item.quantity } },
+        },
       });
     }
 
-    if (!items.length) {
-      throw new ApiError(400, "Cannot place order with an empty cart.");
-    }
-    
-    const shippingCharge = subtotal > 2000 ? 0 : 99; // Same rule as before
-    const finalTotalPrice = subtotal + shippingCharge;
-    
-    const [newOrder] = await Order.create([{
-      user: req.user._id,
-      orderItems: items,
-      shippingAddress: { ...selectedAddress.toObject(), _id: undefined },
-      itemsPrice: subtotal,
-      shippingPrice: shippingCharge,
-      taxPrice: 0, // Simplified: tax included in total
-      totalPrice: finalTotalPrice,
-      paymentId: razorpay_payment_id,
-      razorpayOrderId: razorpay_order_id,
-      paymentMethod: "Razorpay",
-      orderStatus: "Processing", // Order is paid and processing
-    }], { session });
+    // 6. --- Dynamic Coupon Validation and Discount Calculation ---
+    let discountAmount = 0;
+    let validatedCouponCode = null;
 
-    await Product.bulkWrite(stockOps, { session });
+    if (couponCode) {
+      const coupon = await Coupon.findOne({
+        code: couponCode.toUpperCase(), // Match code case-insensitively
+        status: "active",
+      }).session(session); // Ensure coupon check is part of the transaction
+
+      if (coupon) {
+        // If coupon is valid, calculate the discount
+        discountAmount = (subtotal * coupon.discountPercentage) / 100;
+        validatedCouponCode = coupon.code; // Store the official code
+      } else {
+        // If the coupon has become invalid since the user applied it, fail the transaction.
+        throw new ApiError(404, "The applied coupon code is no longer valid.");
+      }
+    }
+
+    // 7. --- Calculate Final Prices ---
+    const shippingCharge = subtotal > 2000 ? 0 : 99; // Example shipping rule
+    const finalTotalPrice = subtotal + shippingCharge - discountAmount;
+
+    // 8. --- Create the Order in the Database ---
+    const [newOrder] = await Order.create(
+      [
+        {
+          user: req.user._id,
+          orderItems: orderItems,
+          shippingAddress: { ...selectedAddress.toObject(), _id: undefined },
+          itemsPrice: subtotal,
+          shippingPrice: shippingCharge,
+          taxPrice: 0, // Simplified for this example
+          discountAmount, // Save the calculated discount
+          couponCode: validatedCouponCode, // Save the validated coupon code
+          totalPrice: finalTotalPrice,
+          paymentId: razorpay_payment_id,
+          razorpayOrderId: razorpay_order_id,
+          paymentMethod: "Razorpay",
+          orderStatus: "Processing",
+        },
+      ],
+      { session } // Ensure order creation is part of the transaction
+    );
+
+    // 9. --- Update Product Stock and Clear User's Cart ---
+    await Product.bulkWrite(stockUpdateOperations, { session });
     user.cart = [];
     await user.save({ session });
-    
+
+    // 10. --- Commit the Transaction ---
+    // If all previous steps were successful, permanently save the changes to the database.
     await session.commitTransaction();
-    
-    res.status(201).json(new ApiResponse(201, { order: newOrder }, "Payment verified & order placed successfully."));
+
+    if (user.email) {
+      sendOrderConfirmationEmail(user.email, newOrder)
+        .catch(err => console.error("Error sending Razorpay confirmation email:", err.message));
+    }
+
+    // 11. --- Send Successful Response ---
+    res
+      .status(201)
+      .json(
+        new ApiResponse(
+          201,
+          { order: newOrder },
+          "Payment verified & order placed successfully."
+        )
+      );
   } catch (error) {
+    // 12. --- Abort Transaction on Error ---
+    // If any error occurred in the `try` block, roll back all database changes.
     await session.abortTransaction();
     console.error("TRANSACTION FAILED AND ROLLED BACK:", error.message);
+    // Rethrow the error to be handled by the global error handler
     throw error;
   } finally {
+    // 13. --- End the Session ---
+    // Always end the session to release its resources.
     session.endSession();
   }
 });
+
 
 export const cancelOrder = asyncHandler(async (req, res) => {
     const { orderId } = req.params;

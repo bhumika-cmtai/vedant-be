@@ -6,6 +6,8 @@ import {
     deleteFromCloudinary,
     getPublicIdFromUrl
 } from "../config/cloudinary.js";
+import { uploadOnS3, deleteFromS3, getObjectKeyFromUrl } from "../config/s3.js";
+
 import { Contact } from "../models/contact.model.js";
 import mongoose from "mongoose";
 
@@ -21,8 +23,7 @@ const submitInquiry = asyncHandler(async (req, res) => {
     const referenceImageLocalPath = req.file?.path;
     let imageUploadResult = null;
     if (referenceImageLocalPath) {
-        // Use the dedicated uploader for contact images
-        imageUploadResult = await uploadContactImageOnCloudinary(referenceImageLocalPath);
+        imageUploadResult = await uploadOnS3(referenceImageLocalPath, "contacts");
     }
 
     const newInquiry = await Contact.create({
@@ -110,14 +111,14 @@ const updateInquiry = asyncHandler(async (req, res) => {
     // Handle new image upload
     const referenceImageLocalPath = req.file?.path;
     if (referenceImageLocalPath) {
-        // 1. Delete the old image from Cloudinary if it exists
+        // 1. Purani image S3 se delete karein agar hai to
         if (inquiry.referenceImage) {
-            const publicId = getPublicIdFromUrl(inquiry.referenceImage);
-            if (publicId) await deleteFromCloudinary(publicId, "image");
+            const objectKey = getObjectKeyFromUrl(inquiry.referenceImage);
+            if (objectKey) await deleteFromS3(objectKey);
         }
 
-        // 2. Upload the new image
-        const imageUploadResult = await uploadContactImageOnCloudinary(referenceImageLocalPath);
+        // 2. Nayi image upload karein
+        const imageUploadResult = await uploadOnS3(referenceImageLocalPath, "contacts");
         if (!imageUploadResult) {
             throw new ApiError(500, "Failed to upload new reference image.");
         }
@@ -149,9 +150,9 @@ const deleteInquiry = asyncHandler(async (req, res) => {
 
     // If a reference image exists, delete it from Cloudinary
     if (inquiryToDelete.referenceImage) {
-        const publicId = getPublicIdFromUrl(inquiryToDelete.referenceImage);
-        if (publicId) {
-            await deleteFromCloudinary(publicId, 'image');
+        const objectKey = getObjectKeyFromUrl(inquiryToDelete.referenceImage);
+        if (objectKey) {
+            await deleteFromS3(objectKey);
         }
     }
 
