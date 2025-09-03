@@ -207,10 +207,17 @@ const deleteAddress = asyncHandler(async (req, res) => {
 });
 
 const getWishlist = asyncHandler(async (req, res) => {
+  console.log("wishlist start")
+  try{
     const user = await User.findById(req.user._id)
-        .populate({ path: "wishlist", select: "name price images stock" })
-        .select("wishlist");
+    .populate({ path: "wishlist", select: "name price images stock" })
+    .select("wishlist");
+    console.log("wishlist ok")
     res.status(200).json(new ApiResponse(200, user.wishlist || [], "Wishlist fetched successfully"));
+  }catch(error){
+    console.log("error aagya")
+    console.log(error)
+  }
 });
 
 const addToWishlist = asyncHandler(async (req, res) => {

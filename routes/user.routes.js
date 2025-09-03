@@ -27,7 +27,7 @@ import { upload } from "../middlewares/multer.middleware.js";
 const router = Router();
 
 // This middleware requires the user to be authenticated for all subsequent routes.
-// router.use(authMiddleware);
+router.use(authMiddleware);
 
 // --- Profile Routes ---
 router.route("/profile").get(getMyProfile).patch(updateMyProfile);
