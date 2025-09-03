@@ -95,6 +95,7 @@ const verifyOtp = asyncHandler(async (req, res) => {
   const options = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
+    sameSite: "strict" 
   };
 
   return res
@@ -118,7 +119,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
   const accessToken = user.generateAccessToken();
   const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
-  const options = { httpOnly: true, secure: process.env.NODE_ENV === "production" };
+  const options = { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "strict"  };
 
   return res.status(200).cookie("accessToken", accessToken, options)
     .json(new ApiResponse(200, { user: loggedInUser, accessToken }, "User logged in successfully"));
@@ -131,6 +132,7 @@ const logoutUser = asyncHandler(async (req, res) => {
   const options = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
+    sameSite: "strict" 
   };
 
   return res
