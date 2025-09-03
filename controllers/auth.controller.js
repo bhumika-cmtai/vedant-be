@@ -118,8 +118,14 @@ const loginUser = asyncHandler(async (req, res) => {
   if (!isPasswordValid) throw new ApiError(401, "Invalid user credentials.");
 
   const accessToken = user.generateAccessToken();
+  console.log("---accessToken---")
+  console.log(accessToken)
   const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
-  const options = { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "none"  };
+  const options = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  };
 
   return res.status(200).cookie("accessToken", accessToken, options)
     .json(new ApiResponse(200, { user: loggedInUser, accessToken }, "User logged in successfully"));
@@ -132,7 +138,7 @@ const logoutUser = asyncHandler(async (req, res) => {
   const options = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "none" 
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   };
 
   return res

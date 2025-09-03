@@ -44,6 +44,7 @@ router.route("/wishlist").get(getWishlist).post(addToWishlist);
 router.route("/wishlist/:productId").delete(removeFromWishlist);
 
 // --- Cart Routes ---
+console.log('---yahan tk phuch gye hao---')
 router.route("/cart").get(getCart).post(addToCart);
 router.route("/cart/item/:cartItemId").delete(removeFromCart); // Use a more specific path
 router.route("/cart/item/quantity/:productId").patch(updateCartQuantity); // Use a more specific path
