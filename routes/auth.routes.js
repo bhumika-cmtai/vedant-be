@@ -12,8 +12,6 @@ import { authMiddleware } from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
-// Zaroori badlav: Yahan se multer (upload.none()) middleware hata diya gaya hai.
-// Ab yeh route સીધા JSON data lega.
 router.post("/register", registerUser);
 
 // Baaki ke routes waise hi rahenge

@@ -16,14 +16,19 @@ const orderSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     orderItems: [
       {
-        name: { type: String, required: true },
+        product_name: { type: String, required: true },
         quantity: { type: Number, required: true },
-        price: { type: Number, required: true },
-        product: {
+        price_per_item: { type: Number, required: true },
+        image: { type: String, required: true },
+        product_id: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "Product",
           required: true,
         },
+        // Variant specific details
+        sku_variant: { type: String },
+        size: { type: String },
+        color: { type: String },
       },
     ],
     shippingAddress: {

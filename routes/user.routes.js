@@ -15,11 +15,13 @@ import {
   addToCart,
   removeFromCart,
   updateCartQuantity,
-  placeOrder,
+  // placeOrder,
   getMyOrders,
   getSingleOrder,
   setDefaultAddress,
-  placeCodOrder
+  placeCodOrder,
+  mergeLocalCart,
+  mergeLocalWishlist
 } from "../controllers/user.controller.js";
 import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
@@ -43,11 +45,16 @@ router.route("/address/default/:addressId").patch(setDefaultAddress);
 router.route("/wishlist").get(getWishlist).post(addToWishlist);
 router.route("/wishlist/:productId").delete(removeFromWishlist);
 
+
 // --- Cart Routes ---
 console.log('---yahan tk phuch gye hao---')
 router.route("/cart").get(getCart).post(addToCart);
 router.route("/cart/item/:cartItemId").delete(removeFromCart); // Use a more specific path
 router.route("/cart/item/quantity/:productId").patch(updateCartQuantity); // Use a more specific path
+
+router.route("/cart/merge").post(mergeLocalCart);
+router.route("/wishlist/merge").post(mergeLocalWishlist); 
+
 
 // --- Order Routes ---
 // --- Order Routes ---

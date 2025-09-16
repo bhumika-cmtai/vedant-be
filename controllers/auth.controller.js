@@ -11,56 +11,49 @@ const generateOtp = () =>
 const registerUser = asyncHandler(async (req, res) => {
   const { name, email, password, role } = req.body;
 
-  console.log(name, email, password, role)
   if ([name, email, password].some((field) => !field || field.trim() === "")) {
     throw new ApiError(400, "Name, email, and password are required");
   }
-  // console.log(name, email, password)
-  try{
 
-    const existingUser = await User.findOne({ email });
-    const otp = generateOtp();
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-    
+  // --- Yahan se internal try...catch block hata diya gaya hai ---
+  
+  const existingUser = await User.findOne({ email });
+
+  if (existingUser) {
+    // Agar user pehle se hai, to seedha error bhejo.
+    // asyncHandler is error ko pakad kar client ko bhej dega.
+    throw new ApiError(409, "User with this email already exists. Please login.");
+  }
+
+  // Naya user banane ka process
+  const otp = generateOtp();
+  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
   const emailHtml = `
-    <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-      <h2>Welcome to Gullnaaz!</h2>
-      <p>Hi ${name},</p>
-      <p>Thank you for registering. Please use the following OTP to verify your email address. This OTP is valid for 10 minutes.</p>
-      <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px; background-color: #f0f0f0; padding: 10px 20px; border-radius: 5px; display: inline-block;">
-      ${otp}
-      </p>
-      <p>If you did not request this, please ignore this email.</p>
-      </div>
-      `;
+  <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+    <h2>Welcome to Florawear!</h2>
+    <p>Hi ${name},</p>
+    <p>Thank you for registering. Please use the following OTP to verify your email address. This OTP is valid for 10 minutes.</p>
+    <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px; background-color: #f0f0f0; padding: 10px 20px; border-radius: 5px; display: inline-block;">
+    ${otp}
+    </p>
+    <p>If you did not request this, please ignore this email.</p>
+  </div>
+  `;
 
-      if (existingUser) {
-        if (existingUser.isVerified) {
-          throw new ApiError(409, "User with this email is already registered.");
-        }
-        existingUser.password = password;
-        existingUser.fullName = name;
-        existingUser.otp = otp;
-        existingUser.otpExpiry = otpExpiry;
-        await existingUser.save({ validateBeforeSave: true });
-        await sendEmail(email, "Verify Your Email Address", emailHtml);
-        return res.status(200).json(new ApiResponse(200, { email }, "A new OTP has been sent."));
-      }
-      
-      await User.create({
-        fullName: name,
-        email,
-        password,
-        role: role && role.toLowerCase() === "admin" ? "admin" : "user",
-        otp,
-        otpExpiry,
-        isVerified: false,
-      });
+  await User.create({
+    fullName: name,
+    email,
+    password,
+    role: role && role.toLowerCase() === "admin" ? "admin" : "user",
+    otp,
+    otpExpiry,
+    isVerified: false,
+  });
+
   await sendEmail(email, "Verify Your Email Address", emailHtml);
-  return res.status(201).json(new ApiResponse(201, { email }, "User registered. Please check email for OTP."));
-}catch(error){
-  console.log("error")
-}
+
+  return res.status(201).json(new ApiResponse(201, { email }, "User registered. Please check your email for OTP."));
 });
 
 const verifyOtp = asyncHandler(async (req, res) => {

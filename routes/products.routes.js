@@ -16,7 +16,4 @@ router.route("/:productId")
 router.route("/slug/:slug")
                 .get(getProductBySlug)
 
-
-
-
 export default router

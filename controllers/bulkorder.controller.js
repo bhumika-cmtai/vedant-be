@@ -2,7 +2,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { BulkOrder } from '../models/bulkorder.model.js';
-import { Product } from '../models/product.model.js'; // Assuming you have a Product model
+import Product from '../models/product.model.js'; // Assuming you have a Product model
 import mongoose from 'mongoose';
 
 /**
