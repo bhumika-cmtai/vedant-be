@@ -26,10 +26,10 @@ const createTransporter = () => {
  * @returns {string} - The full HTML content of the email
  */
 const generateEmailHTML = (subject, message, imageUrl) => {
-  const appName = process.env.APP_NAME || 'Gullnaaz';
+  const appName = process.env.APP_NAME || 'Velvetvibe';
   // Replace with your actual logo URL and social media links
   const logoUrl = 'https://res.cloudinary.com/dvsxcre8k/image/upload/v1756186468/products/jymuackdmew22yed6do4.png'; 
-  const instagramUrl = 'https://www.instagram.com/gullnaaz925?igsh=NDk5ZzdqYWJ2b3Jx';
+  const instagramUrl = '';
 
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden;">
@@ -96,7 +96,7 @@ export const sendBulkEmail = async (emailList, subject, message, imageUrl) => {
     const emailHtml = generateEmailHTML(subject, message, imageUrl);
 
     const mailOptions = {
-      from: `"${process.env.APP_NAME || 'Gullnaaz'}" <${process.env.MAIL_USER}>`,
+      from: `"${process.env.APP_NAME || 'Velvetvibe'}" <${process.env.MAIL_USER}>`,
       to: process.env.MAIL_USER,
       bcc: validEmails,
       subject: subject,
@@ -125,9 +125,9 @@ export const sendBulkEmail = async (emailList, subject, message, imageUrl) => {
 };
 
 const generateOrderConfirmationHTML = (order) => {
-  const appName = process.env.APP_NAME || 'Gullnaaz';
+  const appName = process.env.APP_NAME || 'Velvetvibe';
   const logoUrl = 'https://res.cloudinary.com/dvsxcre8k/image/upload/v1756186468/products/jymuackdmew22yed6do4.png';
-  const instagramUrl = 'https://www.instagram.com/gullnaaz925?igsh=NDk5ZzdqYWJ2b3Jx';
+  const instagramUrl = '';
 
   const orderItemsHTML = order.orderItems.map(item => `
     <tr style="border-bottom: 1px solid #eee;">
@@ -218,10 +218,10 @@ export const sendOrderConfirmationEmail = async (userEmail, order) => {
   try {
     const transporter = createTransporter();
     const emailHtml = generateOrderConfirmationHTML(order);
-    const subject = `Your ${process.env.APP_NAME || 'Gullnaaz'} Order Confirmation #${order._id}`;
+    const subject = `Your ${process.env.APP_NAME || 'Velvetvibe'} Order Confirmation #${order._id}`;
     
     const mailOptions = {
-      from: `"${process.env.APP_NAME || 'Gullnaaz'}" <${process.env.MAIL_USER}>`,
+      from: `"${process.env.APP_NAME || 'Velvetvibe'}" <${process.env.MAIL_USER}>`,
       to: userEmail,
       subject: subject,
       html: emailHtml,

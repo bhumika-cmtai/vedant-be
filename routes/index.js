@@ -10,6 +10,7 @@ import couponRouter from "./coupon.routes.js"
 import notificationRouter from './notification.routes.js';
 import productsRouter from './products.routes.js';
 import bulkOrderRouter from "./bulkorder.routes.js"
+import reviewRouter from './review.routes.js';
 const router = Router();
 router.use("/auth", authRouter);
 router.use("/users", userRouter);
@@ -22,6 +23,8 @@ router.use("/coupon", couponRouter)
 router.use("/notifications",notificationRouter)
 router.use("/products",productsRouter)
 router.use("/bulk-orders",bulkOrderRouter)
+router.use("/reviews", reviewRouter);
+
 
 
 export default router;

@@ -19,7 +19,7 @@ export const sendEmail = async (to, subject, html) => {
     });
 
     const info = await transporter.sendMail({
-      from: `"Gullnaaz Enterprises" <${process.env.MAIL_USER}>`,
+      from: `"Velvetvibe Enterprises" <${process.env.MAIL_USER}>`,
       to: to,
       subject: subject,
       html: html,
