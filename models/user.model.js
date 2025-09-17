@@ -49,6 +49,37 @@ const addressSchema = new mongoose.Schema({
   },
 });
 
+
+const cartItemSchema = new mongoose.Schema({
+  product: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Product",
+    required: true,
+  },
+  sku_variant: {
+    type: String,
+    required: true,
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    min: 1,
+    default: 1,
+  },
+  price: {
+    type: Number,
+    required: true,
+  },
+  image: {
+    type: String, 
+  },
+  attributes: {
+    type: Map,
+    of: String,
+  }
+}, { _id: true, timestamps: true });
+
+
 const userSchema = new mongoose.Schema(
   {
     fullName: {
@@ -91,21 +122,7 @@ const userSchema = new mongoose.Schema(
         ref: "Product",
       },
     ],
-    cart: [
-      {
-        product: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Product",
-          required: true,
-        },
-        quantity: {
-          type: Number,
-          required: true,
-          min: 1,
-          default: 1,
-        },
-      },
-    ],
+    cart: [cartItemSchema],
     otp: { type: String, select: false },
     otpExpiry: { type: Date, select: false },
     forgotPasswordToken: { type: String, select: false },

@@ -58,9 +58,9 @@ router.route("/wishlist/merge").post(mergeLocalWishlist);
 
 // --- Order Routes ---
 // --- Order Routes ---
-router.route("/users/order/cod").post(placeCodOrder); // COD order place karne ke liye
-router.route("/users/orders").get(getMyOrders);       // User ke saare orders laane ke liye
-router.route("/users/orders/:orderId").get(getSingleOrder); // User ka ek specific order laane ke liye
+router.route("/order/cod").post(placeCodOrder); // COD order place karne ke liye
+router.route("/orders").get(getMyOrders);       // User ke saare orders laane ke liye
+router.route("/orders/:orderId").get(getSingleOrder); // User ka ek specific order laane ke liye
 
 
 export default router;

@@ -201,45 +201,61 @@ const getCart = asyncHandler(async (req, res) => {
 
 
 const addToCart = asyncHandler(async (req, res) => {
-  const { productId, quantity = 1 } = req.body;
-  
-  if (!productId) {
-      throw new ApiError(400, "Product ID is required");
+  const { productId, sku_variant, quantity = 1 } = req.body;
+
+  if (!productId || !sku_variant) {
+    throw new ApiError(400, "Product ID and SKU (variant) are required");
   }
 
   const product = await Product.findById(productId);
-  if (!product) throw new ApiError(404, "Product not found");
-  
-  // Check stock
-  if (product.stock_quantity < quantity) {
-      throw new ApiError(400, `Not enough stock. Only ${product.stock_quantity} items left.`);
+  if (!product) {
+    throw new ApiError(404, "Product not found");
+  }
+
+  // Product ke andar se correct variant dhoondho
+  const variant = product.variants.find(v => v.sku_variant === sku_variant);
+  if (!variant) {
+    throw new ApiError(404, "The selected variant (SKU) does not exist for this product.");
+  }
+
+  if (variant.stock < quantity) {
+    throw new ApiError(400, `Not enough stock for the selected variant. Only ${variant.stock} left.`);
   }
 
   const user = await User.findById(req.user._id);
-  // Find item by product's ObjectId
-  const itemIndex = user.cart.findIndex(item => item.product.toString() === productId);
+
+  // Cart mein check karo ki same product aur same sku ka item pehle se hai ya nahi
+  const itemIndex = user.cart.findIndex(item =>
+    item.product.toString() === productId && item.sku_variant === sku_variant
+  );
 
   if (itemIndex > -1) {
-      // If item exists, update quantity
-      user.cart[itemIndex].quantity += quantity;
+    // Agar item pehle se hai, to sirf quantity badhao
+    user.cart[itemIndex].quantity += quantity;
   } else {
-      // If item does not exist, add it to the cart
-      // --- FIXED: Use 'product' field, not 'product_id' ---
-      user.cart.push({
-          product: productId, // CORRECTED FIELD NAME
-          quantity,
-      });
+    // Agar naya item hai, to poori details ke saath add karo
+    const cartItemData = {
+      product: productId,
+      sku_variant: variant.sku_variant,
+      quantity: quantity,
+      price: variant.price, // Variant ka price save karo
+      image: variant.image || product.mainImage, // Variant ki image ya product ki main image
+      attributes: variant.attributes // Jaise { size: "M", color: "Blue" }
+    };
+    user.cart.push(cartItemData);
   }
-  
-  await user.save({ validateBeforeSave: false });
-  
-  // Fetch the updated cart and populate it to send back to the user
-  const updatedUser = await User.findById(req.user._id)
-      .populate({ path: "cart.product", select: "name slug price mainImage" })
-      .select("cart")
-      .lean();
 
-  res.status(200).json(new ApiResponse(200, updatedUser.cart, "Product added to cart"));
+  await user.save();
+
+  const updatedCart = await User.findById(req.user._id)
+    .populate({
+      path: "cart.product",
+      select: "name slug"
+    })
+    .select("cart")
+    .lean();
+
+  res.status(200).json(new ApiResponse(200, updatedCart.cart, "Product added to cart successfully!"));
 });
 
 
@@ -248,192 +264,226 @@ const mergeLocalCart = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
   if (!localCartItems || !Array.isArray(localCartItems) || localCartItems.length === 0) {
-      throw new ApiError(400, "No local cart items provided to merge.");
+    const currentUser = await User.findById(userId)
+      .populate({ path: "cart.product", select: "name slug" })
+      .select("cart").lean();
+    return res.status(200).json(new ApiResponse(200, currentUser.cart, "No items to merge."));
   }
 
   const user = await User.findById(userId);
   if (!user) throw new ApiError(404, "User not found");
 
-  localCartItems.forEach(localItem => {
-      const dbItemIndex = user.cart.findIndex(dbItem => dbItem.product.toString() === localItem._id);
+  for (const localItem of localCartItems) {
+    const product = await Product.findById(localItem.productId);
+    if (!product || !localItem.sku_variant) continue; // Agar product ya sku_variant nahi hai to skip karo
 
-      if (dbItemIndex > -1) {
-          user.cart[dbItemIndex].quantity += localItem.quantity;
-      } else {
-          user.cart.push({
-              product: localItem._id,
-              quantity: localItem.quantity,
-          });
-      }
-  });
+    const variant = product.variants.find(v => v.sku_variant === localItem.sku_variant);
+    if (!variant) continue; // Agar variant nahi hai to skip karo
 
-  await user.save({ validateBeforeSave: false });
+    const dbItemIndex = user.cart.findIndex(dbItem =>
+      dbItem.product.toString() === localItem.productId && dbItem.sku_variant === localItem.sku_variant
+    );
 
-  const updatedUser = await User.findById(userId)
-      .populate({
-          path: "cart.product",
-          select: "name price images slug"
-      })
-      .select("cart")
-      .lean();
+    if (dbItemIndex > -1) {
+      user.cart[dbItemIndex].quantity += localItem.quantity;
+    } else {
+      user.cart.push({
+        product: localItem.productId,
+        sku_variant: variant.sku_variant,
+        quantity: localItem.quantity,
+        price: variant.price,
+        image: variant.image || product.mainImage,
+        attributes: variant.attributes,
+      });
+    }
+  }
 
-  res.status(200).json(new ApiResponse(200, updatedUser.cart, "Cart merged successfully"));
+  await user.save();
+
+  const updatedCart = await User.findById(userId)
+      .populate({ path: "cart.product", select: "name slug" })
+      .select("cart").lean();
+
+  res.status(200).json(new ApiResponse(200, updatedCart.cart, "Cart merged successfully"));
 });
+
+
 
 const removeFromCart = asyncHandler(async (req, res) => {
-  // --- EDITED: This now uses the cart item's own _id for removal ---
-  const { cartItemId } = req.params; // Expecting cart item's ID, which is more reliable
-  if (!cartItemId) throw new ApiError(400, "Cart Item ID is required to remove an item.");
+  const { cartItemId } = req.params;
+  if (!cartItemId) throw new ApiError(400, "Cart Item ID is required.");
 
-  await User.findByIdAndUpdate(req.user._id, { $pull: { cart: { _id: cartItemId } } });
+  // Yeh logic bilkul theek tha, ismein change ki zaroorat nahi
+  const user = await User.findByIdAndUpdate(
+    req.user._id,
+    { $pull: { cart: { _id: cartItemId } } },
+    { new: true }
+  ).populate({
+    path: "cart.product",
+    select: "name slug"
+  });
 
-  const updatedUser = await User.findById(req.user._id)
-    .populate({ path: "cart.product", select: "name" })
-    .select("cart")
-    .lean();
-    
-  res.status(200).json(new ApiResponse(200, updatedUser.cart, "Item removed from cart"));
+  if (!user) throw new ApiError(404, "User not found");
+  
+  res.status(200).json(new ApiResponse(200, user.cart, "Item removed from cart"));
 });
 
+
 const updateCartQuantity = asyncHandler(async (req, res) => {
-  // --- EDITED: This uses the cart item's _id and new quantity ---
   const { cartItemId } = req.params;
   const { quantity } = req.body;
 
-  if (!quantity || quantity < 1) throw new ApiError(400, "A valid quantity (at least 1) is required.");
-  if (!cartItemId) throw new ApiError(400, "Cart Item ID is required to update quantity.");
+  if (!quantity || quantity < 1) throw new ApiError(400, "A valid quantity is required.");
+  if (!cartItemId) throw new ApiError(400, "Cart Item ID is required.");
 
-  // Find the product to check stock against
-  const userForStockCheck = await User.findById(req.user._id).populate('cart.product');
-  const cartItem = userForStockCheck.cart.find(item => item._id.toString() === cartItemId);
-  
+  const user = await User.findById(req.user._id);
+  if (!user) throw new ApiError(404, "User not found");
+
+  const cartItem = user.cart.id(cartItemId); // .id() sub-document dhoondne ka aasan tareeka hai
   if (!cartItem) throw new ApiError(404, "Item not found in cart.");
-  if (cartItem.product.stock_quantity < quantity) {
-      throw new ApiError(400, `Not enough stock. Only ${cartItem.product.stock_quantity} items available.`);
+
+  const product = await Product.findById(cartItem.product);
+  if (!product) {
+    user.cart.id(cartItemId).remove(); // Agar product delete ho gaya hai, to cart se hata do
+    await user.save();
+    throw new ApiError(404, "Product no longer exists and has been removed from your cart.");
   }
 
-  // If stock is sufficient, update the quantity
-  await User.updateOne(
-      { _id: req.user._id, "cart._id": cartItemId },
-      { $set: { "cart.$.quantity": quantity } }
-  );
-  
-  const updatedUser = await User.findById(req.user._id)
-    .populate({ path: "cart.product", select: "name" })
-    .select("cart")
-    .lean();
+  const variant = product.variants.find(v => v.sku_variant === cartItem.sku_variant);
+  if (!variant) {
+    user.cart.id(cartItemId).remove();
+    await user.save();
+    throw new ApiError(404, "This product variant no longer exists and has been removed from your cart.");
+  }
 
-  res.status(200).json(new ApiResponse(200, updatedUser.cart, "Cart quantity updated"));
-})
+  if (variant.stock < quantity) {
+    throw new ApiError(400, `Not enough stock. Only ${variant.stock} items available.`);
+  }
+
+  cartItem.quantity = quantity;
+  await user.save();
+
+  const updatedCart = await user.populate({
+    path: "cart.product",
+    select: "name slug"
+  });
+
+  res.status(200).json(new ApiResponse(200, updatedCart.cart, "Cart quantity updated"));
+});
 
 
 // --- CRITICAL CHANGES: Order Management for Variants ---
 
 const placeCodOrder = asyncHandler(async (req, res) => {
-    // --- REWRITTEN: Full logic to handle variants during order placement ---
-    const { addressId, couponCode } = req.body;
-    if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
+  const { addressId, couponCode } = req.body;
+  if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    try {
-        const user = await User.findById(req.user._id)
-            .populate({
-                path: "cart.product",
-                select: "name variants base_price"
-            })
-            .session(session);
+  try {
+      // --- QUERY (Ismein koi change nahi) ---
+      const user = await User.findById(req.user._id)
+          .populate({
+              path: "cart.product", // Path 'product' hi rahega (aapke schema ke anusaar)
+              select: "name variants base_price"
+          })
+          .session(session);
 
-        if (!user?.cart?.length) throw new ApiError(400, "Your cart is empty.");
-        
-        const shippingAddress = user.addresses.id(addressId);
-        if (!shippingAddress) throw new ApiError(404, "Shipping address not found.");
+      if (!user?.cart?.length) throw new ApiError(400, "Your cart is empty.");
+      
+      const shippingAddress = user.addresses.id(addressId);
+      if (!shippingAddress) throw new ApiError(404, "Shipping address not found.");
 
-        let subtotal = 0;
-        const orderItems = [];
-        const stockUpdates = [];
+      let subtotal = 0;
+      const orderItems = [];
+      const stockUpdates = [];
 
-        for (const item of user.cart) {
-            if (!item.product_id) throw new ApiError(404, `A product in your cart is no longer available.`);
-            
-            const productVariant = item.product_id.variants.find(v => v.sku_variant === item.sku_variant);
-            if (!productVariant) throw new ApiError(400, `Variant for ${item.product_id.name} is no longer available.`);
-            
-            if (productVariant.stock_quantity < item.quantity) {
-                throw new ApiError(400, `Not enough stock for "${item.product_id.name}" (${item.size}, ${item.color}).`);
-            }
+      // --- LOOP (Yahan badlav kiye gaye hain) ---
+      for (const item of user.cart) {
+          // Ab 'item.product' check karein, jo ki populated document hai
+          if (!item.product) throw new ApiError(404, `A product in your cart is no longer available.`);
+          
+          // 'item.product' (populated object) ke andar variants dhoondein
+          const productVariant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
+          if (!productVariant) throw new ApiError(400, `Variant for ${item.product.name} is no longer available.`);
+          
+          if (productVariant.stock_quantity < item.quantity) {
+              throw new ApiError(400, `Not enough stock for "${item.product.name}" (${item.size}, ${item.color}).`);
+          }
 
-            subtotal += item.price_per_item * item.quantity;
+          subtotal += item.price_per_item * item.quantity;
 
-            orderItems.push({
-                product_id: item.product_id._id,
-                product_name: item.product_id.name,
-                quantity: item.quantity,
-                price_per_item: item.price_per_item,
-                image: item.image,
-                sku_variant: item.sku_variant,
-                size: item.size,
-                color: item.color
-            });
+          orderItems.push({
+              product_id: item.product._id, // ID ke liye item.product._id ka istemal karein
+              product_name: item.product.name,
+              quantity: item.quantity,
+              price_per_item: item.price_per_item,
+              image: item.image,
+              sku_variant: item.sku_variant,
+              size: item.size,
+              color: item.color
+          });
 
-            stockUpdates.push({
-                updateOne: {
-                    filter: { _id: item.product_id._id, "variants.sku_variant": item.sku_variant },
-                    update: { $inc: { "variants.$.stock_quantity": -item.quantity } },
-                },
-            });
-        }
+          stockUpdates.push({
+              updateOne: {
+                  filter: { _id: item.product._id, "variants.sku_variant": item.sku_variant },
+                  update: { $inc: { "variants.$.stock_quantity": -item.quantity } },
+              },
+          });
+      }
 
-        if (orderItems.length === 0) throw new ApiError(400, "No valid items in cart.");
+      if (orderItems.length === 0) throw new ApiError(400, "No valid items in cart.");
 
-        let discountAmount = 0;
-        let validatedCouponCode = null;
-        if (couponCode) {
-            const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" }).session(session);
-            if (coupon) {
-                discountAmount = (subtotal * coupon.discountPercentage) / 100;
-                validatedCouponCode = coupon.code;
-            } else {
-                throw new ApiError(404, "Invalid or inactive coupon code.");
-            }
-        }
+      // --- Baaki code waise hi rahega ---
+      let discountAmount = 0;
+      let validatedCouponCode = null;
+      if (couponCode) {
+          const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" }).session(session);
+          if (coupon) {
+              discountAmount = (subtotal * coupon.discountPercentage) / 100;
+              validatedCouponCode = coupon.code;
+          } else {
+              throw new ApiError(404, "Invalid or inactive coupon code.");
+          }
+      }
 
-        const shippingCharge = subtotal > 2000 ? 0 : 99;
-        const finalTotalPrice = subtotal + shippingCharge - discountAmount;
+      const shippingCharge = subtotal > 2000 ? 0 : 99;
+      const finalTotalPrice = subtotal + shippingCharge - discountAmount;
 
-        const [newOrder] = await Order.create([{
-            user: req.user._id,
-            orderItems,
-            shippingAddress: shippingAddress.toObject(),
-            itemsPrice: subtotal,
-            shippingPrice: shippingCharge,
-            taxPrice: 0,
-            discountAmount,
-            couponCode: validatedCouponCode,
-            totalPrice: finalTotalPrice,
-            paymentMethod: "COD",
-            orderStatus: "Processing",
-        }], { session });
+      const [newOrder] = await Order.create([{
+          user: req.user._id,
+          orderItems,
+          shippingAddress: shippingAddress.toObject(),
+          itemsPrice: subtotal,
+          shippingPrice: shippingCharge,
+          taxPrice: 0,
+          discountAmount,
+          couponCode: validatedCouponCode,
+          totalPrice: finalTotalPrice,
+          paymentMethod: "COD",
+          orderStatus: "Processing",
+      }], { session });
 
-        await Product.bulkWrite(stockUpdates, { session });
-        user.cart = [];
-        await user.save({ session, validateBeforeSave: false });
+      await Product.bulkWrite(stockUpdates, { session });
+      user.cart = [];
+      await user.save({ session, validateBeforeSave: false });
 
-        await session.commitTransaction();
+      await session.commitTransaction();
 
-        if (user.email) {
-            sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
-        }
+      if (user.email) {
+          sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
+      }
 
-        res.status(201).json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));
-    } catch (error) {
-        await session.abortTransaction();
-        throw error;
-    } finally {
-        session.endSession();
-    }
+      res.status(201).json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));
+  } catch (error) {
+      await session.abortTransaction();
+      throw error;
+  } finally {
+      session.endSession();
+  }
 });
+
 
 const getMyOrders = asyncHandler(async (req, res) => {
     const { page = 1, limit = 5 } = req.query;

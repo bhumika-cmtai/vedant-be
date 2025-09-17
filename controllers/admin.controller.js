@@ -84,7 +84,7 @@ const createProduct = asyncHandler(async (req, res) => {
     if (!name || !description || !category || !brand || !price) {
       throw new ApiError(400, "Name, description, brand, category, and price are required.");
     }
-
+    
     const isVariableProduct = !!variants;
 
     const imageFiles = req.files?.images;
