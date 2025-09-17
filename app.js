@@ -14,14 +14,14 @@ console.log(
 // ✅ CORS middleware (corrected and complete)
 app.use(
   cors({
-    origin: ["http://localhost:3000", "https://Velvetvibe.vercel.app/","https://www.velvetvibe.org/", "https://www.velvetvibe.org"],
+    origin: ["http://localhost:3000", "https://Velvetvibe.vercel.app","https://www.velvetvibe.org", "https://www.velvetvibe.org"],
     credentials: true,
   })
 );
 
 // ✅ Handle preflight OPTIONS request for all routes
 app.options("*", cors({
-  origin: ["http://localhost:3000", "https://Velvetvibe.vercel.app/","https://www.velvetvibe.org/", "https://www.velvetvibe.org"],
+  origin: ["http://localhost:3000", "https://Velvetvibe.vercel.app","https://www.velvetvibe.org", "https://www.velvetvibe.org"],
   credentials: true,
 }));
 
