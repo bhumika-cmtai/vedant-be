@@ -340,7 +340,7 @@ const placeCodOrder = asyncHandler(async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
             .populate({
-                path: "cart.product_id",
+                path: "cart.product",
                 select: "name variants base_price"
             })
             .session(session);

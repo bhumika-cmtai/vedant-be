@@ -75,7 +75,7 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
 const createProduct = asyncHandler(async (req, res) => {
   try {
     const {
-      name, description, category, brand, gender, tags,
+      name, description, category,sub_category ,brand, gender, tags,
       price, sale_price, stock_quantity,
       variants,
       fit, careInstructions, sleeveLength, neckType, pattern 
@@ -121,6 +121,7 @@ const createProduct = asyncHandler(async (req, res) => {
       price: parseFloat(price),
       sale_price: sale_price ? parseFloat(sale_price) : undefined,
       fit,
+      sub_category,
       careInstructions,
       sleeveLength,
       neckType,
@@ -317,24 +318,100 @@ const deleteProduct = asyncHandler(async (req, res) => {
 });
 
 const getAllProducts = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, search, type, gender, tags } = req.query;
+  const {
+    page = 1, limit = 10, search, category, sub_category,
+    gender, tags, color, fit, pattern, sleeveLength, neckType,
+    minPrice, maxPrice, sort = 'newest', onSale
+  } = req.query;
+
   const query = {};
 
+  if (onSale === 'true') {
+    query.sale_price = { $exists: true, $ne: null };
+    query.$expr = { $lt: ["$sale_price", "$price"] };
+  }
+
+  // --- SEARCH FUNCTIONALITY (UPDATED) ---
   if (search) {
+    const searchRegex = { $regex: search, $options: "i" };
     query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
-        { tags: { $regex: search, $options: "i" } },
+      { name: searchRegex },
+      { description: searchRegex },
+      { tags: searchRegex },
+      { category: searchRegex },
+      { sub_category: searchRegex },
+      { brand: searchRegex },
+      { 'variants.color': searchRegex }, // Search inside variants' color
+      { color: searchRegex },           // --- NEW: Search in top-level color field ---
     ];
   }
-  if (type) query.type = type;
-  if (gender) query.gender = gender;
-  if (tags) query.tags = { $in: tags.split(',') };
 
+  // --- FILTERING LOGIC ---
+  if (category) query.category = { $in: category.split(',') };
+  if (sub_category) query.sub_category = { $in: sub_category.split(',') };
+  if (gender) query.gender = { $in: gender.split(',') };
+  if (tags) query.tags = { $in: tags.split(',') };
+  if (fit) query.fit = { $in: fit.split(',') };
+  if (pattern) query.pattern = { $in: pattern.split(',') };
+  if (sleeveLength) query.sleeveLength = { $in: sleeveLength.split(',') };
+  if (neckType) query.neckType = { $in: neckType.split(',') };
+
+  // --- COLOR FILTER LOGIC (UPDATED & IMPROVED) ---
+  if (color) {
+    const colorArray = color.split(',');
+    // Yeh query un products ko dhoondhegi:
+    // 1. Jinke top-level 'color' field in colors se match kare
+    //    (assuming you have a 'color' field in your schema for simple products)
+    // OR
+    // 2. Jinke 'variants' array ke andar kisi bhi item ka 'color' match kare
+    query.$or = [
+        { color: { $in: colorArray } },
+        { 'variants.color': { $in: colorArray } }
+    ];
+  }
+
+  // Price Range Filter
+  if (minPrice || maxPrice) {
+    const priceQuery = {
+      ...(minPrice && { $gte: Number(minPrice) }),
+      ...(maxPrice && { $lte: Number(maxPrice) })
+    };
+    // Check if the base query already has an $or condition
+    if (query.$or) {
+        // If it does, we need to wrap both conditions in an $and
+        query.$and = [
+            { $or: query.$or }, // The existing $or for search/color
+            { $or: [ { price: priceQuery }, { sale_price: priceQuery } ] } // The new $or for price
+        ];
+        delete query.$or; // Remove the old $or to avoid conflicts
+    } else {
+        query.$or = [ { price: priceQuery }, { sale_price: priceQuery } ];
+    }
+  }
+  
+  // --- Sorting Logic (No change) ---
+  const sortOption = {};
+  switch (sort) {
+    case 'price-asc':
+      sortOption.sale_price = 1;
+      sortOption.price = 1;
+      break;
+    case 'price-desc':
+      sortOption.sale_price = -1;
+      sortOption.price = -1;
+      break;
+    case 'newest':
+    default:
+      sortOption.createdAt = -1;
+      break;
+  }
+
+  // --- Database Fetch & Response (No change) ---
   const productsPromise = Product.find(query)
-    .sort({ createdAt: -1 })
+    .sort(sortOption)
     .skip((page - 1) * limit)
-    .limit(limit);
+    .limit(limit)
+    .lean();
 
   const totalProductsPromise = Product.countDocuments(query);
   const [products, totalProducts] = await Promise.all([productsPromise, totalProductsPromise]);
@@ -346,6 +423,7 @@ const getAllProducts = asyncHandler(async (req, res) => {
       totalProducts,
   }, "Products fetched successfully"));
 });
+
 
 // GET ALL USERS 
 const getAllUsers = asyncHandler(async (req, res) => {

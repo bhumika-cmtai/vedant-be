@@ -74,6 +74,10 @@ const ProductSchema = new mongoose.Schema({
         required: [true, 'Please provide a category'], 
         trim: true 
     },
+    sub_category: {
+        type: String,
+        trim: true
+    },
     brand: { 
         type: String, 
         required: [true, 'Please provide a brand name'], 
