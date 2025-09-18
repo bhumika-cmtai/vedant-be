@@ -50,7 +50,7 @@ router.route("/wishlist/:productId").delete(removeFromWishlist);
 console.log('---yahan tk phuch gye hao---')
 router.route("/cart").get(getCart).post(addToCart);
 router.route("/cart/item/:cartItemId").delete(removeFromCart); // Use a more specific path
-router.route("/cart/item/quantity/:productId").patch(updateCartQuantity); // Use a more specific path
+router.route("/cart/item/quantity/:cartItemId").patch(updateCartQuantity); // Use a more specific path
 
 router.route("/cart/merge").post(mergeLocalCart);
 router.route("/wishlist/merge").post(mergeLocalWishlist); 

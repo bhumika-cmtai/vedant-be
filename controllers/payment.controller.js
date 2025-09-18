@@ -40,95 +40,102 @@ const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
 
 // API Controllers
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
-  // --- REWRITTEN to support variants ---
-  const { addressId, amount: frontendTotalAmount, couponCode } = req.body;
-  if (!addressId || !frontendTotalAmount) {
-    throw new ApiError(400, "Address ID and amount are required.");
+  // --- UPDATED: Removed 'amount' from destructuring ---
+  const { addressId, couponCode } = req.body;
+
+  // We still need to validate that an address was sent
+  if (!addressId) {
+    throw new ApiError(400, "An Address ID is required to create an order.");
   }
 
-  // Populate the correct path and select the 'variants' field for stock checking
   const user = await User.findById(req.user._id)
     .populate({
-      path: "cart.product_id", // Correct path for the new user model
-      select: "name base_price price variants" // 'variants' is crucial
+      path: "cart.product",
+      select: "name price sale_price stock_quantity variants"
     });
     
   if (!user || !user.cart.length) {
     throw new ApiError(400, "Your cart is empty.");
   }
 
+  // --- Backend price calculation (This is now the single source of truth) ---
   let backendSubtotal = 0;
   for (const item of user.cart) {
-    if (!item.product_id) throw new ApiError(404, "A product in your cart is unavailable.");
+    if (!item.product) throw new ApiError(404, "A product in your cart is unavailable.");
     
-    // Check stock based on product type (simple or variable)
-    if (item.sku_variant) { // It's a variable product
-        const variant = item.product_id.variants.find(v => v.sku_variant === item.sku_variant);
+    // Stock validation
+    if (item.sku_variant) {
+        const variant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
         if (!variant || variant.stock_quantity < item.quantity) {
-            throw new ApiError(400, `Not enough stock for ${item.product_id.name} (${item.size}, ${item.color}).`);
+            throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
         }
-    } else { // It's a simple product
-        if (item.product_id.stock_quantity < item.quantity) {
-            throw new ApiError(400, `Not enough stock for ${item.product_id.name}.`);
+    } else {
+        if (item.product.stock_quantity < item.quantity) {
+            throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
         }
     }
-    // Calculate price from the item stored in the cart, which is safer
-    backendSubtotal += item.price_per_item * item.quantity;
+    // Calculate price using the price stored in the cart item
+    backendSubtotal += item.price * item.quantity;
   }
 
-  // Coupon logic remains the same
   let discountAmount = 0;
   if (couponCode) {
     const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" });
-    if (!coupon) throw new ApiError(404, "Invalid or inactive coupon code.");
-    discountAmount = (backendSubtotal * coupon.discountPercentage) / 100;
+    if (coupon) {
+        discountAmount = (backendSubtotal * coupon.discountPercentage) / 100;
+    }
   }
 
-  const shippingCharge = backendSubtotal > 2000 ? 0 : 99;
-  const backendTotalAmount = backendSubtotal + shippingCharge - discountAmount;
-
-  if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1) { // Allow for small floating point differences
-    throw new ApiError(400, "Price mismatch between frontend and backend. Please refresh and try again.");
-  }
+  const shippingPrice = 90;
+  const taxRate = 0.03;
+  const taxPrice = (backendSubtotal - discountAmount) * taxRate;
+  const backendTotalAmount = (backendSubtotal - discountAmount) + shippingPrice + taxPrice;
   
+  // --- REMOVED: The price mismatch validation block has been deleted ---
+  // if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1) { ... }
+
   const razorpayOrder = await razorpay.orders.create({
-    amount: Math.round(backendTotalAmount * 100),
+    // Use the securely calculated backend amount
+    amount: Math.round(backendTotalAmount * 100), 
     currency: "INR",
-    receipt: crypto.randomBytes(10).toString("hex"),
+    receipt: `rcpt_${crypto.randomBytes(6).toString("hex")}`,
   });
 
-  if (!razorpayOrder) throw new ApiError(500, "Failed to create Razorpay order.");
+  if (!razorpayOrder) {
+    throw new ApiError(500, "Failed to create Razorpay order.");
+  }
   
   res.status(200).json(new ApiResponse(200, {
     orderId: razorpayOrder.id,
-    amount: razorpayOrder.amount,
+    amount: razorpayOrder.amount, // Send the final calculated amount back to frontend
     key: process.env.RAZORPAY_KEY_ID,
     addressId,
-  }, "Razorpay order created."));
+  }, "Razorpay order created successfully."));
 });
 
+
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
-  // --- REWRITTEN to support variants in order creation ---
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode } = req.body;
 
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !addressId) {
     throw new ApiError(400, "Missing required payment or address details.");
   }
 
-  // 1. Verify Payment Signature
   const sign = `${razorpay_order_id}|${razorpay_payment_id}`;
   const expectedSign = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET).update(sign).digest("hex");
   if (razorpay_signature !== expectedSign) {
-    throw new ApiError(400, "Invalid payment signature. Transaction failed.");
+    throw new ApiError(400, "Invalid payment signature.");
   }
 
-  // 2. Start Database Transaction
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const user = await User.findById(req.user._id)
-      .populate({ path: "cart.product_id", select: "name base_price price variants" })
+      .populate({ 
+        path: "cart.product", // --- FIX: Using 'product' ---
+        select: "name price sale_price stock_quantity variants images"
+      })
       .session(session);
 
     if (!user?.cart?.length) throw new ApiError(400, "Cannot place order with an empty cart.");
@@ -136,91 +143,91 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     const selectedAddress = user.addresses.id(addressId);
     if (!selectedAddress) throw new ApiError(404, "Selected address not found.");
 
-    // 3. Prepare Order Details, Validate Stock, and Calculate Subtotal
     let subtotal = 0;
     const orderItems = [];
     const stockUpdateOperations = [];
 
     for (const item of user.cart) {
-      if (!item.product_id) throw new ApiError(404, "A product in your cart is no longer available.");
-      
-      subtotal += item.price_per_item * item.quantity;
-      
-      // Create the detailed order item based on the new schema
-      orderItems.push({
-        product_id: item.product_id._id,
-        product_name: item.product_id.name,
-        quantity: item.quantity,
-        price_per_item: item.price_per_item,
-        image: item.image,
-        // Add variant details if they exist
-        sku_variant: item.sku_variant,
-        size: item.size,
-        color: item.color,
-      });
+      if (!item.product) {
+        throw new ApiError(404, `A product in your cart is no longer available.`);
+      }
 
-      // Prepare the correct stock update operation
-      if (item.sku_variant) { // For Variable Product
-        const variant = item.product_id.variants.find(v => v.sku_variant === item.sku_variant);
-        if (!variant || variant.stock_quantity < item.quantity) {
-          throw new ApiError(400, `Not enough stock for ${item.product_id.name} (${item.size}, ${item.color}).`);
-        }
+      subtotal += item.price * item.quantity;
+
+      const orderItemData = {
+        product_id: item.product._id,
+        product_name: item.product.name,
+        quantity: item.quantity,
+        price_per_item: item.price,
+        image: item.image || item.product.images[0],
+        sku_variant: item.sku_variant,
+        size: item.attributes?.get('size'),
+        color: item.attributes?.get('color'),
+      };
+      orderItems.push(orderItemData);
+
+      if (item.sku_variant) {
+        const productVariant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
+        if (!productVariant) throw new ApiError(400, `Variant for "${item.product.name}" is no longer available.`);
+        if (productVariant.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
         stockUpdateOperations.push({
           updateOne: {
-            filter: { _id: item.product_id._id, "variants.sku_variant": item.sku_variant },
+            filter: { _id: item.product._id, "variants.sku_variant": item.sku_variant },
             update: { $inc: { "variants.$.stock_quantity": -item.quantity } },
           },
         });
-      } else { // For Simple Product
-        if (item.product_id.stock_quantity < item.quantity) {
-          throw new ApiError(400, `Not enough stock for ${item.product_id.name}.`);
-        }
+      } else {
+        if (item.product.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
         stockUpdateOperations.push({
           updateOne: {
-            filter: { _id: item.product_id._id },
+            filter: { _id: item.product._id },
             update: { $inc: { stock_quantity: -item.quantity } },
           },
         });
       }
     }
 
-    // 4. Coupon and Final Price Calculation (no changes needed here)
+    if (orderItems.length === 0) throw new ApiError(400, "No valid items to place order.");
+
     let discountAmount = 0;
     let validatedCouponCode = null;
     if (couponCode) {
-        // ... (coupon logic remains the same)
+      const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" }).session(session);
+      if (coupon) {
+        discountAmount = (subtotal * coupon.discountPercentage) / 100;
+        validatedCouponCode = coupon.code;
+      }
     }
-    const shippingCharge = subtotal > 2000 ? 0 : 99;
-    const finalTotalPrice = subtotal + shippingCharge - discountAmount;
 
-    // 5. Create the Order
+    const shippingPrice = 90;
+    const taxRate = 0.03;
+    const taxPrice = (subtotal - discountAmount) * taxRate;
+    const totalPrice = (subtotal - discountAmount) + shippingPrice + taxPrice;
+
     const [newOrder] = await Order.create([{
         user: req.user._id,
-        orderItems: orderItems, // This now contains all the variant details
-        shippingAddress: { ...selectedAddress.toObject(), _id: undefined },
+        orderItems,
+        shippingAddress: selectedAddress.toObject(),
         itemsPrice: subtotal,
-        shippingPrice: shippingCharge,
-        taxPrice: 0,
+        shippingPrice,
+        taxPrice,
         discountAmount,
+        totalPrice,
         couponCode: validatedCouponCode,
-        totalPrice: finalTotalPrice,
         paymentId: razorpay_payment_id,
         razorpayOrderId: razorpay_order_id,
         paymentMethod: "Razorpay",
-        orderStatus: "Processing", // Or "Paid"
+        orderStatus: "Processing",
     }], { session });
 
-    // 6. Update Stock and Clear Cart
     await Product.bulkWrite(stockUpdateOperations, { session });
     user.cart = [];
-    await user.save({ session });
+    await user.save({ session, validateBeforeSave: false });
 
-    // 7. Commit Transaction
     await session.commitTransaction();
 
     if (user.email) {
-      sendOrderConfirmationEmail(user.email, newOrder)
-        .catch(err => console.error("Error sending email:", err));
+      sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
     }
 
     res.status(201).json(new ApiResponse(201, { order: newOrder }, "Payment verified & order placed successfully."));

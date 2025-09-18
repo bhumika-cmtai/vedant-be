@@ -332,7 +332,7 @@ const removeFromCart = asyncHandler(async (req, res) => {
 const updateCartQuantity = asyncHandler(async (req, res) => {
   const { cartItemId } = req.params;
   const { quantity } = req.body;
-
+  console.log(cartItemId)
   if (!quantity || quantity < 1) throw new ApiError(400, "A valid quantity is required.");
   if (!cartItemId) throw new ApiError(400, "Cart Item ID is required.");
 
@@ -382,48 +382,54 @@ const placeCodOrder = asyncHandler(async (req, res) => {
   session.startTransaction();
 
   try {
-      // --- QUERY (Ismein koi change nahi) ---
       const user = await User.findById(req.user._id)
           .populate({
-              path: "cart.product", // Path 'product' hi rahega (aapke schema ke anusaar)
-              select: "name variants base_price"
+              path: "cart.product",
+              select: "name variants images"
           })
           .session(session);
 
-      if (!user?.cart?.length) throw new ApiError(400, "Your cart is empty.");
+      if (!user?.cart || user.cart.length === 0) {
+          throw new ApiError(400, "Your cart is empty.");
+      }
       
       const shippingAddress = user.addresses.id(addressId);
-      if (!shippingAddress) throw new ApiError(404, "Shipping address not found.");
+      if (!shippingAddress) {
+          throw new ApiError(404, "Shipping address not found.");
+      }
 
       let subtotal = 0;
       const orderItems = [];
       const stockUpdates = [];
 
-      // --- LOOP (Yahan badlav kiye gaye hain) ---
       for (const item of user.cart) {
-          // Ab 'item.product' check karein, jo ki populated document hai
-          if (!item.product) throw new ApiError(404, `A product in your cart is no longer available.`);
+          if (!item.product) {
+              throw new ApiError(404, `A product in your cart is no longer available.`);
+          }
           
-          // 'item.product' (populated object) ke andar variants dhoondein
           const productVariant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
-          if (!productVariant) throw new ApiError(400, `Variant for ${item.product.name} is no longer available.`);
+          if (!productVariant) {
+              throw new ApiError(400, `Variant for "${item.product.name}" is no longer available.`);
+          }
           
           if (productVariant.stock_quantity < item.quantity) {
-              throw new ApiError(400, `Not enough stock for "${item.product.name}" (${item.size}, ${item.color}).`);
+              throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
           }
 
-          subtotal += item.price_per_item * item.quantity;
+          subtotal += item.price * item.quantity;
 
+          // --- YAHAN HUM 'orderItems' KO AAPKE SCHEMA SE MATCH KAR RAHE HAIN ---
           orderItems.push({
-              product_id: item.product._id, // ID ke liye item.product._id ka istemal karein
+              product_id: item.product._id,
               product_name: item.product.name,
               quantity: item.quantity,
-              price_per_item: item.price_per_item,
-              image: item.image,
+              price_per_item: item.price,
+              image: item.image || item.product.images[0],
               sku_variant: item.sku_variant,
-              size: item.size,
-              color: item.color
+              size: productVariant.size,
+              color: productVariant.color,
           });
+          // --- END ---
 
           stockUpdates.push({
               updateOne: {
@@ -433,9 +439,10 @@ const placeCodOrder = asyncHandler(async (req, res) => {
           });
       }
 
-      if (orderItems.length === 0) throw new ApiError(400, "No valid items in cart.");
+      if (orderItems.length === 0) {
+          throw new ApiError(400, "No valid items to place order.");
+      }
 
-      // --- Baaki code waise hi rahega ---
       let discountAmount = 0;
       let validatedCouponCode = null;
       if (couponCode) {
@@ -444,26 +451,38 @@ const placeCodOrder = asyncHandler(async (req, res) => {
               discountAmount = (subtotal * coupon.discountPercentage) / 100;
               validatedCouponCode = coupon.code;
           } else {
-              throw new ApiError(404, "Invalid or inactive coupon code.");
+              // Ab error throw karne ke bajaye, hum ise silently ignore kar sakte hain ya client ko message bhej sakte hain
+              // throw new ApiError(404, "Invalid or inactive coupon code.");
           }
       }
 
-      const shippingCharge = subtotal > 2000 ? 0 : 99;
-      const finalTotalPrice = subtotal + shippingCharge - discountAmount;
+      // --- PRICE CALCULATION (AAPKE REQUIREMENTS KE ANUSAAR) ---
+      const shippingPrice = 90; // Hardcoded 90 rupees
+      
+      const taxRate = 0.03; // 3%
+      const taxPrice = (subtotal - discountAmount) * taxRate; // Tax discount ke baad lagega
 
+      const totalPrice = (subtotal - discountAmount) + shippingPrice + taxPrice;
+      // --- END PRICE CALCULATION ---
+
+      // --- NAYA ORDER OBJECT (AAPKE SCHEMA SE BILKUL MATCH KARTA HUA) ---
       const [newOrder] = await Order.create([{
           user: req.user._id,
-          orderItems,
+          orderItems, // Yeh pehle se hi sahi format mein hai
           shippingAddress: shippingAddress.toObject(),
+          
+          // Sabhi zaroori price fields
           itemsPrice: subtotal,
-          shippingPrice: shippingCharge,
-          taxPrice: 0,
-          discountAmount,
+          shippingPrice: shippingPrice,
+          taxPrice: taxPrice,
+          discountAmount: discountAmount,
+          totalPrice: totalPrice,
+
           couponCode: validatedCouponCode,
-          totalPrice: finalTotalPrice,
           paymentMethod: "COD",
-          orderStatus: "Processing",
+          orderStatus: "Processing", // COD ke liye "Processing" aamtaur par aacha status hai
       }], { session });
+      // --- END NEW ORDER OBJECT ---
 
       await Product.bulkWrite(stockUpdates, { session });
       user.cart = [];
@@ -483,6 +502,7 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       session.endSession();
   }
 });
+
 
 
 const getMyOrders = asyncHandler(async (req, res) => {

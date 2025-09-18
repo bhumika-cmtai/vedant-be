@@ -25,6 +25,10 @@ const ReviewSchema = new mongoose.Schema({
         type: String,
         required: true,
         trim: true
+    },
+    images: {
+        type: [String], // Array of image URLs
+        default: []
     }
 }, { timestamps: true });
 

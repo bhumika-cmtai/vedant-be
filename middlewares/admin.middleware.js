@@ -2,7 +2,7 @@ import { ApiError } from "../utils/ApiError.js";
 export const adminMiddleware = (req, res, next) => {
 
     if (req.user && req.user.role === 'admin'){
-        console.log("---authorized admin---")
+        // console.log("---authorized admin---")
         console.log(req.user)
         next();
     }
