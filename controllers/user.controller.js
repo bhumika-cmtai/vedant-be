@@ -201,10 +201,11 @@ const getCart = asyncHandler(async (req, res) => {
 
 
 const addToCart = asyncHandler(async (req, res) => {
+  // sku_variant is now optional
   const { productId, sku_variant, quantity = 1 } = req.body;
 
-  if (!productId || !sku_variant) {
-    throw new ApiError(400, "Product ID and SKU (variant) are required");
+  if (!productId) {
+    throw new ApiError(400, "Product ID is required");
   }
 
   const product = await Product.findById(productId);
@@ -212,51 +213,85 @@ const addToCart = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Product not found");
   }
 
-  // Product ke andar se correct variant dhoondho
-  const variant = product.variants.find(v => v.sku_variant === sku_variant);
-  if (!variant) {
-    throw new ApiError(404, "The selected variant (SKU) does not exist for this product.");
-  }
-
-  if (variant.stock < quantity) {
-    throw new ApiError(400, `Not enough stock for the selected variant. Only ${variant.stock} left.`);
-  }
-
   const user = await User.findById(req.user._id);
+  let cartItemData; // We will define this based on product type
+  let itemIndex; // We will define this based on product type
 
-  // Cart mein check karo ki same product aur same sku ka item pehle se hai ya nahi
-  const itemIndex = user.cart.findIndex(item =>
-    item.product.toString() === productId && item.sku_variant === sku_variant
-  );
+  // --- THIS IS THE MAIN FIX ---
+  if (product.variants && product.variants.length > 0) {
+    // --- Case 1: It's a VARIABLE (Clothing) Product ---
+    if (!sku_variant) {
+      throw new ApiError(400, "Please select a variant (e.g., size and color).");
+    }
 
-  if (itemIndex > -1) {
-    // Agar item pehle se hai, to sirf quantity badhao
-    user.cart[itemIndex].quantity += quantity;
-  } else {
-    // Agar naya item hai, to poori details ke saath add karo
-    const cartItemData = {
+    const variant = product.variants.find(v => v.sku_variant === sku_variant);
+    if (!variant) {
+      throw new ApiError(404, "The selected variant does not exist for this product.");
+    }
+
+    if (variant.stock_quantity < quantity) {
+      throw new ApiError(400, `Not enough stock. Only ${variant.stock_quantity} left.`);
+    }
+
+    // Check if this specific variant is already in the cart
+    itemIndex = user.cart.findIndex(item =>
+      item.product.toString() === productId && item.sku_variant === sku_variant
+    );
+
+    // Prepare the data for the cart
+    cartItemData = {
       product: productId,
       sku_variant: variant.sku_variant,
       quantity: quantity,
-      price: variant.price, // Variant ka price save karo
-      image: variant.image || product.mainImage, // Variant ki image ya product ki main image
-      attributes: variant.attributes // Jaise { size: "M", color: "Blue" }
+      price: variant.sale_price || variant.price, // Use sale price if available
+      image: (variant.images && variant.images[0]) || product.images[0],
+      attributes: new Map([['size', variant.size], ['color', variant.color]])
     };
+
+  } else {
+    // --- Case 2: It's a SIMPLE (Decorative) Product ---
+    if (product.stock_quantity < quantity) {
+      throw new ApiError(400, `Not enough stock. Only ${product.stock_quantity} left.`);
+    }
+
+    // Check if this simple product is already in the cart
+    // For simple products, sku_variant is not considered
+    itemIndex = user.cart.findIndex(item =>
+      item.product.toString() === productId && !item.sku_variant
+    );
+    
+    // Prepare the data for the cart
+    cartItemData = {
+      product: productId,
+      quantity: quantity,
+      price: product.sale_price || product.price,
+      image: product.images[0],
+      // sku_variant is intentionally left undefined
+    };
+  }
+
+  // --- Universal Logic to Add or Update Cart ---
+  if (itemIndex > -1) {
+    // If item already exists, just increase the quantity
+    user.cart[itemIndex].quantity += quantity;
+  } else {
+    // If it's a new item, push the whole data object
     user.cart.push(cartItemData);
   }
 
-  await user.save();
+  await user.save({ validateBeforeSave: false });
 
   const updatedCart = await User.findById(req.user._id)
     .populate({
       path: "cart.product",
-      select: "name slug"
+      select: "name slug images"
     })
     .select("cart")
     .lean();
 
   res.status(200).json(new ApiResponse(200, updatedCart.cart, "Product added to cart successfully!"));
 });
+
 
 
 const mergeLocalCart = asyncHandler(async (req, res) => {
@@ -376,7 +411,9 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
 
 const placeCodOrder = asyncHandler(async (req, res) => {
   const { addressId, couponCode } = req.body;
-  if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
+  if (!addressId) {
+    throw new ApiError(400, "Shipping address ID is required.");
+  }
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -385,7 +422,7 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       const user = await User.findById(req.user._id)
           .populate({
               path: "cart.product",
-              select: "name variants images"
+              select: "name variants images stock_quantity" 
           })
           .session(session);
 
@@ -395,7 +432,7 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       
       const shippingAddress = user.addresses.id(addressId);
       if (!shippingAddress) {
-          throw new ApiError(404, "Shipping address not found.");
+          throw new ApiError(404, "Shipping address not found in your profile.");
       }
 
       let subtotal = 0;
@@ -404,43 +441,64 @@ const placeCodOrder = asyncHandler(async (req, res) => {
 
       for (const item of user.cart) {
           if (!item.product) {
-              throw new ApiError(404, `A product in your cart is no longer available.`);
+              throw new ApiError(404, `A product in your cart is no longer available. Please remove it and try again.`);
           }
           
-          const productVariant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
-          if (!productVariant) {
-              throw new ApiError(400, `Variant for "${item.product.name}" is no longer available.`);
-          }
-          
-          if (productVariant.stock_quantity < item.quantity) {
-              throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
-          }
-
           subtotal += item.price * item.quantity;
 
-          // --- YAHAN HUM 'orderItems' KO AAPKE SCHEMA SE MATCH KAR RAHE HAIN ---
-          orderItems.push({
-              product_id: item.product._id,
-              product_name: item.product.name,
-              quantity: item.quantity,
-              price_per_item: item.price,
-              image: item.image || item.product.images[0],
-              sku_variant: item.sku_variant,
-              size: productVariant.size,
-              color: productVariant.color,
-          });
-          // --- END ---
+          if (item.sku_variant) {
+              // --- Logic for Variable (Clothing) Product ---
+              const productVariant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
+              if (!productVariant) {
+                  throw new ApiError(400, `The selected variant for "${item.product.name}" is no longer available.`);
+              }
+              if (productVariant.stock_quantity < item.quantity) {
+                  throw new ApiError(400, `Not enough stock for "${item.product.name}" (${productVariant.size}, ${productVariant.color}).`);
+              }
 
-          stockUpdates.push({
-              updateOne: {
-                  filter: { _id: item.product._id, "variants.sku_variant": item.sku_variant },
-                  update: { $inc: { "variants.$.stock_quantity": -item.quantity } },
-              },
-          });
+              orderItems.push({
+                  product_id: item.product._id,
+                  product_name: item.product.name,
+                  quantity: item.quantity,
+                  price_per_item: item.price,
+                  image: item.image || productVariant.images?.[0] || item.product.images[0],
+                  sku_variant: item.sku_variant,
+                  size: productVariant.size,
+                  color: productVariant.color,
+              });
+
+              stockUpdates.push({
+                  updateOne: {
+                      filter: { "_id": item.product._id, "variants.sku_variant": item.sku_variant },
+                      update: { "$inc": { "variants.$.stock_quantity": -item.quantity } },
+                  },
+              });
+
+          } else {
+              // --- Logic for Simple (Decorative) Product ---
+              if (item.product.stock_quantity < item.quantity) {
+                  throw new ApiError(400, `Not enough stock for "${item.product.name}". Only ${item.product.stock_quantity} left.`);
+              }
+
+              orderItems.push({
+                  product_id: item.product._id,
+                  product_name: item.product.name,
+                  quantity: item.quantity,
+                  price_per_item: item.price,
+                  image: item.image || item.product.images[0],
+              });
+              
+              stockUpdates.push({
+                  updateOne: {
+                      filter: { "_id": item.product._id },
+                      update: { "$inc": { "stock_quantity": -item.quantity } },
+                  },
+              });
+          }
       }
 
       if (orderItems.length === 0) {
-          throw new ApiError(400, "No valid items to place order.");
+          throw new ApiError(400, "No valid items found in the cart to place an order.");
       }
 
       let discountAmount = 0;
@@ -450,39 +508,27 @@ const placeCodOrder = asyncHandler(async (req, res) => {
           if (coupon) {
               discountAmount = (subtotal * coupon.discountPercentage) / 100;
               validatedCouponCode = coupon.code;
-          } else {
-              // Ab error throw karne ke bajaye, hum ise silently ignore kar sakte hain ya client ko message bhej sakte hain
-              // throw new ApiError(404, "Invalid or inactive coupon code.");
           }
       }
 
-      // --- PRICE CALCULATION (AAPKE REQUIREMENTS KE ANUSAAR) ---
-      const shippingPrice = 90; // Hardcoded 90 rupees
-      
-      const taxRate = 0.03; // 3%
-      const taxPrice = (subtotal - discountAmount) * taxRate; // Tax discount ke baad lagega
-
+      const shippingPrice = 90;
+      const taxRate = 0.03;
+      const taxPrice = (subtotal - discountAmount) * taxRate;
       const totalPrice = (subtotal - discountAmount) + shippingPrice + taxPrice;
-      // --- END PRICE CALCULATION ---
 
-      // --- NAYA ORDER OBJECT (AAPKE SCHEMA SE BILKUL MATCH KARTA HUA) ---
       const [newOrder] = await Order.create([{
           user: req.user._id,
-          orderItems, // Yeh pehle se hi sahi format mein hai
+          orderItems,
           shippingAddress: shippingAddress.toObject(),
-          
-          // Sabhi zaroori price fields
           itemsPrice: subtotal,
           shippingPrice: shippingPrice,
           taxPrice: taxPrice,
           discountAmount: discountAmount,
           totalPrice: totalPrice,
-
           couponCode: validatedCouponCode,
           paymentMethod: "COD",
-          orderStatus: "Processing", // COD ke liye "Processing" aamtaur par aacha status hai
+          orderStatus: "Processing",
       }], { session });
-      // --- END NEW ORDER OBJECT ---
 
       await Product.bulkWrite(stockUpdates, { session });
       user.cart = [];
@@ -491,7 +537,7 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       await session.commitTransaction();
 
       if (user.email) {
-          sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
+          sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send Razorpay order confirmation email:", err));
       }
 
       res.status(201).json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));

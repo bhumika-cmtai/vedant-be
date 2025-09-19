@@ -28,7 +28,7 @@ const createTransporter = () => {
 const generateEmailHTML = (subject, message, imageUrl) => {
   const appName = process.env.APP_NAME || 'Velvetvibe';
   // Replace with your actual logo URL and social media links
-  const logoUrl = 'https://res.cloudinary.com/dvsxcre8k/image/upload/v1756186468/products/jymuackdmew22yed6do4.png'; 
+  const logoUrl = 'https://testbucketecom12.s3.eu-north-1.amazonaws.com/products/1758225456056_ac5408fe41cf633c6c10e5afac303e74.jpg'; 
   const instagramUrl = '';
 
   return `
@@ -126,16 +126,28 @@ export const sendBulkEmail = async (emailList, subject, message, imageUrl) => {
 
 const generateOrderConfirmationHTML = (order) => {
   const appName = process.env.APP_NAME || 'Velvetvibe';
-  const logoUrl = 'https://res.cloudinary.com/dvsxcre8k/image/upload/v1756186468/products/jymuackdmew22yed6do4.png';
+  const logoUrl = 'https://testbucketecom12.s3.eu-north-1.amazonaws.com/products/1758225456056_ac5408fe41cf633c6c10e5afac303e74.jpg';
   const instagramUrl = '';
 
-  const orderItemsHTML = order.orderItems.map(item => `
-    <tr style="border-bottom: 1px solid #eee;">
-      <td style="padding: 10px;">${item.name}</td>
-      <td style="padding: 10px; text-align: center;">${item.quantity}</td>
-      <td style="padding: 10px; text-align: right;">₹${item.price.toLocaleString()}</td>
-    </tr>
-  `).join('');
+  const orderItemsHTML = order.orderItems.map(item => {
+    // --- THIS IS THE IMPROVEMENT ---
+    // Use the correct field names from your orderItems schema
+    const itemName = item.product_name;
+    const itemPrice = item.price_per_item;
+    
+    // Add size and color if they exist (for clothing items)
+    const variantDetails = (item.size && item.color)
+      ? `<br><small style="color: #666;">Size: ${item.size}, Color: ${item.color}</small>`
+      : '';
+      
+    return `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px;">${itemName}${variantDetails}</td>
+        <td style="padding: 10px; text-align: center;">${item.quantity}</td>
+        <td style="padding: 10px; text-align: right;">₹${itemPrice.toLocaleString()}</td>
+      </tr>
+    `;
+  }).join('');
   console.log()
 
   return `
@@ -175,7 +187,12 @@ const generateOrderConfirmationHTML = (order) => {
           <p>Subtotal: ₹${order.itemsPrice.toLocaleString()}</p>
           <p>Shipping: ₹${order.shippingPrice.toLocaleString()}</p>
           ${order.discountAmount > 0 ? `<p style="color: green;">Discount: -₹${order.discountAmount.toLocaleString()}</p>` : ''}
-          <h4 style="color: #333; margin-top: 10px;">Total: ₹${order.totalPrice.toLocaleString()}</h4>
+          
+          ${order.taxPrice > 0 ? `<p>Taxes: ₹${order.taxPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>` : ''}
+          
+          <h4 style="color: #333; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+            Total: ₹${order.totalPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </h4>
         </div>
         
         <!-- Shipping Address -->
