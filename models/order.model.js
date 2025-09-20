@@ -54,6 +54,8 @@ const orderSchema = new mongoose.Schema(
       ],
       default: "Paid",
     },
+
+    
     paymentId: { type: String },
     razorpayOrderId: { type: String },
     paymentMethod: {

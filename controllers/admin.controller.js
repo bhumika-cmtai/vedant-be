@@ -12,17 +12,19 @@ import slugify from "slugify";
 const getAdminDashboardStats = asyncHandler(async (req, res) => {
   const [totalSalesData, newOrdersCount, activeUsersCount] = await Promise.all([
     Order.aggregate([
-      { $match: { orderStatus: { $in: ["Delivered", "Completed"] } } }, // Consider "Completed" if you use it
+      { $match: { orderStatus: { $in: ["Shipped", "Delivered", "Processing"] } } }, 
       { $group: { _id: null, totalSales: { $sum: "$totalPrice" } } },
     ]),
     Order.countDocuments({ orderStatus: { $in: ["Paid", "Processing"] } }),
-    User.countDocuments({ role: "user", status: "Active" }),
+    User.countDocuments({ role: "user", isVerified: true }), 
   ]);
+
   const stats = {
     totalSales: totalSalesData[0]?.totalSales || 0,
     newOrders: newOrdersCount,
     activeUsers: activeUsersCount,
   };
+  
   return res.status(200).json(new ApiResponse(200, stats, "Admin dashboard data fetched"));
 });
 
@@ -34,7 +36,7 @@ const getSalesOverview = asyncHandler(async (req, res) => {
     {
       $match: {
         createdAt: { $gte: twelveMonthsAgo },
-        orderStatus: "Completed",
+        orderStatus: { $in: ["Shipped", "Delivered", "Processing"] }, 
       },
     },
     {
@@ -55,10 +57,12 @@ const getSalesOverview = asyncHandler(async (req, res) => {
   salesData.forEach((item) => {
     monthlySales[item._id.month - 1].sales = item.sales;
   });
+  // console.log(monthlySales)
   return res
     .status(200)
     .json(new ApiResponse(200, monthlySales, "Monthly sales overview fetched"));
 });
+
 
 const getRecentAdminOrders = asyncHandler(async (req, res) => {
   const recentOrders = await Order.find({})
@@ -641,9 +645,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(orderId)) {
     throw new ApiError(400, "Invalid Order ID");
   }
-  const validStatuses = [
-    "Pending", "Processing", "Shipped", "Delivered", "Cancelled",
-  ];
+  const validStatuses = ["Pending", "Processing","Paid" ,"Shipped", "Delivered", "Cancelled"];
   if (!status || !validStatuses.includes(status)) {
     throw new ApiError(
       400,
