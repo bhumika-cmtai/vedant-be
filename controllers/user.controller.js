@@ -7,6 +7,8 @@ import Product  from "../models/product.model.js";
 import { Coupon } from "../models/coupon.model.js";
 import { uploadOnS3, deleteFromS3, getObjectKeyFromUrl } from "../config/s3.js";
 import { sendOrderConfirmationEmail } from "../services/emailService.js";
+import { WalletConfig } from "../models/walletConfig.model.js";
+
 import fs from "fs";
 import mongoose from "mongoose";
 
@@ -212,6 +214,10 @@ const addToCart = asyncHandler(async (req, res) => {
   if (!product) {
     throw new ApiError(404, "Product not found");
   }
+  const minQuantity = product.minQuantity || 1;
+  if (quantity < minQuantity) {
+    throw new ApiError(400, `The minimum order quantity for this product is ${minQuantity}.`);
+  }
 
   const user = await User.findById(req.user._id);
   let cartItemData; // We will define this based on product type
@@ -410,7 +416,8 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
 // --- CRITICAL CHANGES: Order Management for Variants ---
 
 const placeCodOrder = asyncHandler(async (req, res) => {
-  const { addressId, couponCode } = req.body;
+  const { addressId, couponCode, pointsToRedeem } = req.body;
+  
   if (!addressId) {
     throw new ApiError(400, "Shipping address ID is required.");
   }
@@ -419,14 +426,15 @@ const placeCodOrder = asyncHandler(async (req, res) => {
   session.startTransaction();
 
   try {
-      const user = await User.findById(req.user._id)
-          .populate({
-              path: "cart.product",
-              select: "name variants images stock_quantity" 
-          })
-          .session(session);
+      const user = await User.findById(req.user._id).session(session);
+      if (!user) throw new ApiError(404, "User not found.");
 
-      if (!user?.cart || user.cart.length === 0) {
+      await user.populate({
+          path: "cart.product",
+          select: "name variants images stock_quantity" 
+      });
+
+      if (!user.cart || user.cart.length === 0) {
           throw new ApiError(400, "Your cart is empty.");
       }
       
@@ -439,55 +447,35 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       const orderItems = [];
       const stockUpdates = [];
 
+      // This loop is correct and handles both simple and variable products
       for (const item of user.cart) {
           if (!item.product) {
-              throw new ApiError(404, `A product in your cart is no longer available. Please remove it and try again.`);
+              throw new ApiError(404, `A product in your cart is no longer available.`);
           }
-          
           subtotal += item.price * item.quantity;
-
           if (item.sku_variant) {
-              // --- Logic for Variable (Clothing) Product ---
               const productVariant = item.product.variants.find(v => v.sku_variant === item.sku_variant);
-              if (!productVariant) {
-                  throw new ApiError(400, `The selected variant for "${item.product.name}" is no longer available.`);
-              }
-              if (productVariant.stock_quantity < item.quantity) {
-                  throw new ApiError(400, `Not enough stock for "${item.product.name}" (${productVariant.size}, ${productVariant.color}).`);
-              }
-
+              if (!productVariant) throw new ApiError(400, `Variant for "${item.product.name}" is no longer available.`);
+              if (productVariant.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
               orderItems.push({
-                  product_id: item.product._id,
-                  product_name: item.product.name,
-                  quantity: item.quantity,
-                  price_per_item: item.price,
+                  product_id: item.product._id, product_name: item.product.name,
+                  quantity: item.quantity, price_per_item: item.price,
                   image: item.image || productVariant.images?.[0] || item.product.images[0],
-                  sku_variant: item.sku_variant,
-                  size: productVariant.size,
-                  color: productVariant.color,
+                  sku_variant: item.sku_variant, size: productVariant.size, color: productVariant.color,
               });
-
               stockUpdates.push({
                   updateOne: {
                       filter: { "_id": item.product._id, "variants.sku_variant": item.sku_variant },
                       update: { "$inc": { "variants.$.stock_quantity": -item.quantity } },
                   },
               });
-
           } else {
-              // --- Logic for Simple (Decorative) Product ---
-              if (item.product.stock_quantity < item.quantity) {
-                  throw new ApiError(400, `Not enough stock for "${item.product.name}". Only ${item.product.stock_quantity} left.`);
-              }
-
+              if (item.product.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
               orderItems.push({
-                  product_id: item.product._id,
-                  product_name: item.product.name,
-                  quantity: item.quantity,
-                  price_per_item: item.price,
+                  product_id: item.product._id, product_name: item.product.name,
+                  quantity: item.quantity, price_per_item: item.price,
                   image: item.image || item.product.images[0],
               });
-              
               stockUpdates.push({
                   updateOne: {
                       filter: { "_id": item.product._id },
@@ -498,46 +486,83 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       }
 
       if (orderItems.length === 0) {
-          throw new ApiError(400, "No valid items found in the cart to place an order.");
+          throw new ApiError(400, "No valid items to place order.");
       }
 
-      let discountAmount = 0;
+      // --- Discount Calculation (Correct) ---
+      let couponDiscount = 0;
       let validatedCouponCode = null;
       if (couponCode) {
           const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" }).session(session);
           if (coupon) {
-              discountAmount = (subtotal * coupon.discountPercentage) / 100;
+              couponDiscount = (subtotal * coupon.discountPercentage) / 100;
               validatedCouponCode = coupon.code;
           }
       }
 
+      let walletDiscount = 0;
+      const pointsToApply = Number(pointsToRedeem) || 0;
+      if (pointsToApply > 0) {
+          if (pointsToApply > user.wallet) throw new ApiError(400, "You do not have enough points in your wallet.");
+          const walletConfig = await WalletConfig.findOne().session(session);
+          if (!walletConfig?.rupeesPerPoint) throw new ApiError(500, "Wallet configuration is not set up correctly.");
+          walletDiscount = pointsToApply * walletConfig.rupeesPerPoint;
+          if (walletDiscount > (subtotal - couponDiscount)) {
+              walletDiscount = subtotal - couponDiscount;
+          }
+      }
+      
+      const totalDiscount = couponDiscount + walletDiscount;
+
+      // --- Final Price Calculation (Correct) ---
       const shippingPrice = 90;
       const taxRate = 0.03;
-      const taxPrice = (subtotal - discountAmount) * taxRate;
-      const totalPrice = (subtotal - discountAmount) + shippingPrice + taxPrice;
+      const taxPrice = (subtotal - totalDiscount) > 0 ? (subtotal - totalDiscount) * taxRate : 0;
+      const totalPrice = (subtotal - totalDiscount) + shippingPrice + taxPrice;
 
       const [newOrder] = await Order.create([{
           user: req.user._id,
           orderItems,
           shippingAddress: shippingAddress.toObject(),
           itemsPrice: subtotal,
-          shippingPrice: shippingPrice,
-          taxPrice: taxPrice,
-          discountAmount: discountAmount,
-          totalPrice: totalPrice,
+          shippingPrice,
+          taxPrice,
+          discountAmount: totalDiscount,
           couponCode: validatedCouponCode,
+          totalPrice,
           paymentMethod: "COD",
           orderStatus: "Processing",
       }], { session });
 
-      await Product.bulkWrite(stockUpdates, { session });
+      // --- THIS IS THE UPDATED WALLET LOGIC ---
+
+      // 1. Deduct points that the user redeemed
+      if (pointsToApply > 0) {
+          user.wallet -= pointsToApply;
+      }
+
+      // 2. Award new points based on the "near-miss" rule
+      const finalWalletConfig = await WalletConfig.findOne().lean().session(session);
+      // Ensure config and rules exist and are sorted descending by minSpend
+      if (finalWalletConfig?.rewardRules?.length > 0) {
+          // Find the highest milestone that the user is eligible for (or is within ₹5 of)
+          const applicableRule = finalWalletConfig.rewardRules.find(rule => totalPrice >= (rule.minSpend - 5));
+          
+          if (applicableRule) {
+              user.wallet += applicableRule.pointsAwarded;
+          }
+      }
+      
+      // 3. Update the user's cart and new wallet balance in one go
       user.cart = [];
       await user.save({ session, validateBeforeSave: false });
-
+      
+      // --- Final Database Operations ---
+      await Product.bulkWrite(stockUpdates, { session });
       await session.commitTransaction();
 
       if (user.email) {
-          sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send Razorpay order confirmation email:", err));
+          sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error(err));
       }
 
       res.status(201).json(new ApiResponse(201, { order: newOrder }, "COD Order placed successfully!"));

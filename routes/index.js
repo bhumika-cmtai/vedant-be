@@ -12,7 +12,8 @@ import productsRouter from './products.routes.js';
 import bulkOrderRouter from "./bulkorder.routes.js"
 import reviewRouter from './review.routes.js';
 import walletRouter from './wallet.routes.js';
-
+import taxRouter from './tax.routes.js';
+import categoryRouter from './category.routes.js'
 const router = Router();
 router.use("/auth", authRouter);
 router.use("/users", userRouter);
@@ -27,6 +28,8 @@ router.use("/products",productsRouter)
 router.use("/bulk-orders",bulkOrderRouter)
 router.use("/reviews", reviewRouter);
 router.use("/wallet", walletRouter);
+router.use("/tax", taxRouter);
+router.use("/categories", categoryRouter);
 
 
 export default router;

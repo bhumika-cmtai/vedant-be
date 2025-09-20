@@ -11,6 +11,7 @@ import { User } from "../models/user.model.js";
 import Product from "../models/product.model.js";
 import { Coupon } from "../models/coupon.model.js";
 import { sendOrderConfirmationEmail } from "../services/emailService.js";
+import { WalletConfig } from "../models/walletConfig.model.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -115,7 +116,7 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
 
 
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode } = req.body;
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode, pointsToRedeem } = req.body;
 
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !addressId) {
     throw new ApiError(400, "Missing required payment or address details.");
@@ -189,20 +190,36 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
     if (orderItems.length === 0) throw new ApiError(400, "No valid items to place order.");
 
-    let discountAmount = 0;
-    let validatedCouponCode = null;
-    if (couponCode) {
-      const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" }).session(session);
-      if (coupon) {
-        discountAmount = (subtotal * coupon.discountPercentage) / 100;
-        validatedCouponCode = coupon.code;
-      }
-    }
-
-    const shippingPrice = 90;
-    const taxRate = 0.03;
-    const taxPrice = (subtotal - discountAmount) * taxRate;
-    const totalPrice = (subtotal - discountAmount) + shippingPrice + taxPrice;
+          // --- Discount Calculation (Correct) ---
+          let couponDiscount = 0;
+          let validatedCouponCode = null;
+          if (couponCode) {
+              const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), status: "active" }).session(session);
+              if (coupon) {
+                  couponDiscount = (subtotal * coupon.discountPercentage) / 100;
+                  validatedCouponCode = coupon.code;
+              }
+          }
+    
+          let walletDiscount = 0;
+          const pointsToApply = Number(pointsToRedeem) || 0;
+          if (pointsToApply > 0) {
+              if (pointsToApply > user.wallet) throw new ApiError(400, "You do not have enough points in your wallet.");
+              const walletConfig = await WalletConfig.findOne().session(session);
+              if (!walletConfig?.rupeesPerPoint) throw new ApiError(500, "Wallet configuration is not set up correctly.");
+              walletDiscount = pointsToApply * walletConfig.rupeesPerPoint;
+              if (walletDiscount > (subtotal - couponDiscount)) {
+                  walletDiscount = subtotal - couponDiscount;
+              }
+          }
+          
+          const totalDiscount = couponDiscount + walletDiscount;
+    
+          // --- Final Price Calculation (Correct) ---
+          const shippingPrice = 90;
+          const taxRate = 0.03;
+          const taxPrice = (subtotal - totalDiscount) > 0 ? (subtotal - totalDiscount) * taxRate : 0;
+          const totalPrice = (subtotal - totalDiscount) + shippingPrice + taxPrice;
 
     const [newOrder] = await Order.create([{
         user: req.user._id,
@@ -211,7 +228,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         itemsPrice: subtotal,
         shippingPrice,
         taxPrice,
-        discountAmount,
+        discountAmount: totalDiscount,
         totalPrice,
         couponCode: validatedCouponCode,
         paymentId: razorpay_payment_id,

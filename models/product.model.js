@@ -134,6 +134,9 @@ const ProductSchema = new mongoose.Schema({
         default: true
     },
 
+    // cosmetics ke liye
+    volume: {type: Number},
+
     // --- New Fields for Reviews ---
     reviews: [ReviewSchema], // Array to store all reviews
     averageRating: {
@@ -146,7 +149,9 @@ const ProductSchema = new mongoose.Schema({
     numReviews: {
         type: Number,
         default: 0
-    }
+    },
+
+    minQuantity: {type: Number, default: 1}
 
 }, {
     timestamps: true
