@@ -116,10 +116,9 @@ const loginUser = asyncHandler(async (req, res) => {
   const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
   const options = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production", // only HTTPS in prod
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", // cross-site needs "none"
-    domain: ".velvetvibe.org", // ✅ covers velvetvibe.org and www.velvetvibe.org
-  };  
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  };
 
   return res.status(200).cookie("accessToken", accessToken, options)
     .json(new ApiResponse(200, { user: loggedInUser, accessToken }, "User logged in successfully"));
