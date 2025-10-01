@@ -24,6 +24,7 @@ import {
   mergeLocalWishlist
 } from "../controllers/user.controller.js";
 import { authMiddleware } from "../middlewares/auth.middleware.js";
+import { cancelOrder } from "../controllers/payment.controller.js";
 import { upload } from "../middlewares/multer.middleware.js";
 
 const router = Router();
@@ -61,6 +62,7 @@ router.route("/wishlist/merge").post(mergeLocalWishlist);
 router.route("/order/cod").post(placeCodOrder); // COD order place karne ke liye
 router.route("/orders").get(getMyOrders);       // User ke saare orders laane ke liye
 router.route("/orders/:orderId").get(getSingleOrder); // User ka ek specific order laane ke liye
+router.route("/orders/cancel/:orderId").patch(cancelOrder);
 
 
 export default router;

@@ -14,6 +14,8 @@ import reviewRouter from './review.routes.js';
 import walletRouter from './wallet.routes.js';
 import taxRouter from './tax.routes.js';
 import categoryRouter from './category.routes.js'
+import subcategoryRouter from './subcategory.routes.js'
+
 const router = Router();
 router.use("/auth", authRouter);
 router.use("/users", userRouter);
@@ -30,6 +32,8 @@ router.use("/reviews", reviewRouter);
 router.use("/wallet", walletRouter);
 router.use("/tax", taxRouter);
 router.use("/categories", categoryRouter);
+router.use("/subcategories", subcategoryRouter);
+
 
 
 export default router;
