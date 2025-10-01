@@ -92,8 +92,8 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     }
   }
 
-  const shippingPrice = 90;
-  const taxRate = 0.03;
+  const shippingPrice = 0;
+  const taxRate = 0;
   const taxPrice = (backendSubtotal - discountAmount) * taxRate;
   const backendTotalAmount = (backendSubtotal - discountAmount) + shippingPrice + taxPrice;
   
