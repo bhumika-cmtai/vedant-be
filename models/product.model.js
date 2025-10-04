@@ -34,38 +34,37 @@ const ReviewSchema = new mongoose.Schema({
 
 
 const VariantSchema = new mongoose.Schema({
-    size: {
+    name: { // e.g., "10 ml", "30 ml", "Standard Size"
         type: String,
         required: true,
         trim: true
     },
-    color: {
+    sku: { // Stock Keeping Unit for this specific variant
         type: String,
         required: true,
-        trim: true
+        trim: true,
+        unique: true // Ensures every SKU across all products is unique
     },
-    price: {
+    price: { // Price for this specific variant
         type: Number,
         required: true,
         min: 0
     },
-    sale_price: {
+    sale_price: { // Optional sale price for this variant
         type: Number,
         min: 0
     },
-    stock_quantity: {
+    stock_quantity: { // Stock for this specific variant
         type: Number,
         required: true,
         min: 0,
         default: 0
     },
-    sku_variant: {
-        type: String,
-        required: true,
-        trim: true
-    },
-    images: [String]
-});
+    volume: { // The volume, if applicable
+        type: Number
+    }
+}, { _id: true });
+
 
 const ProductSchema = new mongoose.Schema({
     name: {
@@ -105,6 +104,7 @@ const ProductSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    variants: [VariantSchema],
     brand: {
         type: String,
         required: [true, 'Please provide a brand name'],
@@ -118,23 +118,15 @@ const ProductSchema = new mongoose.Schema({
         type: [String],
         default: []
     },
-    variants: [VariantSchema],
     stock_quantity: {
         type: Number,
         min: 0,
         required: true
     },
-    fit: { type: String },
-    careInstructions: { type: String },
-    sleeveLength: { type: String },
-    neckType: { type: String },
-    pattern: { type: String },
     isActive: {
         type: Boolean,
         default: true
     },
-
-    // cosmetics ke liye
     volume: {type: Number},
 
     // --- New Fields for Reviews ---

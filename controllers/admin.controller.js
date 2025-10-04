@@ -77,99 +77,96 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
 });
 
 const createProduct = asyncHandler(async (req, res) => {
-  try {
-    const {
-      name, description, category,sub_category ,brand, gender, tags,
-      price, sale_price, stock_quantity,
-      variants,
-      fit, careInstructions, sleeveLength, neckType, pattern 
-    } = req.body;
+  // --- Destructure all possible fields from the body ---
+  const {
+    name, description, category, sub_category, brand, tags,
+    // Fields for SIMPLE products
+    price, sale_price, stock_quantity, volume,
+    // Field for VARIABLE products (will be a JSON string)
+    variants 
+  } = req.body;
 
-    if (!name || !description || !category || !brand || !price) {
-      throw new ApiError(400, "Name, description, brand, category, and price are required.");
-    }
-    
-    const isVariableProduct = !!variants;
-
-    const imageFiles = req.files?.images;
-    const videoFile = req.files?.video?.[0];
-
-    if (!imageFiles || imageFiles.length === 0) {
-      throw new ApiError(400, "At least one product image is required.");
-    }
-
-    let videoUrl = null;
-    if (videoFile) {
-      const videoUploadResult = await uploadOnS3(videoFile.path, "products");
-      if (videoUploadResult?.url) videoUrl = videoUploadResult.url;
-    }
-
-    const imageUploadPromises = imageFiles.map(file => uploadOnS3(file.path, "products"));
-    const uploadedImages = await Promise.all(imageUploadPromises);
-    const imageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
-
-    if (imageUrls.length !== imageFiles.length) {
-      throw new ApiError(500, "Error occurred while uploading images.");
-    }
-
-    const productData = {
-      name,
-      slug: slugify(name, { lower: true, strict: true }),
-      description,
-      images: imageUrls,
-      video: videoUrl,
-      category,
-      brand,
-      gender,
-      tags: tags ? String(tags).split(',').map(tag => tag.trim()) : [],
-      price: parseFloat(price),
-      sale_price: sale_price ? parseFloat(sale_price) : undefined,
-      fit,
-      sub_category,
-      careInstructions,
-      sleeveLength,
-      neckType,
-      pattern,
-    };
-
-    if (isVariableProduct) {
-      try {
-        const parsedVariants = JSON.parse(variants);
-        let totalStock = 0;
-        for (const variant of parsedVariants) {
-          if (!variant.price || variant.price <= 0 || variant.stock_quantity === undefined || variant.stock_quantity < 0) {
-            throw new ApiError(400, `Each variant must have a valid price and a non-negative stock quantity. Check SKU: ${variant.sku_variant || 'N/A'}`);
-          }
-          // Calculate the total stock from all variants
-          totalStock += Number(variant.stock_quantity);
-        }
-        productData.variants = parsedVariants;
-        productData.stock_quantity = totalStock; // Assign the calculated total stock
-      } catch (e) {
-        if (e instanceof ApiError) throw e;
-        throw new ApiError(400, "Invalid variants JSON format.");
-      }
-    } else {
-      // For simple products, stock_quantity from the body is required.
-      if (stock_quantity === undefined) {
-          throw new ApiError(400, "Stock quantity is required for simple products.");
-      }
-      productData.stock_quantity = parseInt(stock_quantity, 10);
-    }
-
-    const product = await Product.create(productData);
-    if (!product) {
-      throw new ApiError(500, "Database error: Could not create the product.");
-    }
-    return res.status(201).json(new ApiResponse(201, product, "Product created successfully."));
-  } catch (error) {
-    console.error("Error in createProduct:", error);
-    if (error instanceof ApiError) {
-      return res.status(error.statusCode).json({ success: false, message: error.message });
-    }
-    return res.status(500).json({ success: false, message: "Internal Server Error" });
+  // --- Basic Validation ---
+  if (!name || !description || !category || !brand) {
+    throw new ApiError(400, "Name, description, brand, and category are required.");
   }
+
+  // --- File Upload Logic (no changes here) ---
+  const imageFiles = req.files?.images;
+  const videoFile = req.files?.video?.[0];
+
+  if (!imageFiles || imageFiles.length === 0) {
+    throw new ApiError(400, "At least one product image is required.");
+  }
+
+  let videoUrl = null;
+  if (videoFile) {
+    const videoUploadResult = await uploadOnS3(videoFile.path, "products");
+    if (videoUploadResult?.url) videoUrl = videoUploadResult.url;
+  }
+
+  const imageUploadPromises = imageFiles.map(file => uploadOnS3(file.path, "products"));
+  const uploadedImages = await Promise.all(imageUploadPromises);
+  const imageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
+
+  if (imageUrls.length !== imageFiles.length) {
+    throw new ApiError(500, "Error occurred while uploading some images.");
+  }
+
+  // --- Build the base product data object ---
+  const productData = {
+    name,
+    slug: slugify(name, { lower: true, strict: true }),
+    description,
+    images: imageUrls,
+    video: videoUrl,
+    category,
+    sub_category: sub_category || undefined,
+    stock_quantity,
+    brand,
+    tags: tags ? String(tags).split(',').map(tag => tag.trim()) : [],
+  };
+
+  // --- CORE LOGIC: Handle Variants vs. Simple Product ---
+  const isVariableProduct = !!variants;
+
+  if (isVariableProduct) {
+    try {
+      const parsedVariants = JSON.parse(variants);
+      
+      // Validate each variant
+      for (const variant of parsedVariants) {
+        if (!variant.name || !variant.sku || !variant.price || variant.stock_quantity === undefined) {
+          throw new ApiError(400, "Each variant must have a Name, SKU, Price, and Stock Quantity.");
+        }
+      }
+      productData.variants = parsedVariants;
+      // Note: The Mongoose pre-save hook will automatically calculate the total stock and set the main price.
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      throw new ApiError(400, "Invalid variants JSON format received.");
+    }
+  } else {
+    // This is a SIMPLE product
+    if (!price || stock_quantity === undefined) {
+      throw new ApiError(400, "Price and Stock Quantity are required for simple products.");
+    }
+    productData.price = parseFloat(price);
+    productData.sale_price = sale_price ? parseFloat(sale_price) : undefined;
+    productData.stock_quantity = parseInt(stock_quantity, 10);
+    productData.volume = volume ? parseInt(volume, 10) : undefined;
+    productData.variants = []; // Ensure variants array is empty
+  }
+
+  // --- Create the product in the database ---
+  const product = await Product.create(productData);
+  if (!product) {
+    throw new ApiError(500, "Database error: Could not create the product.");
+  }
+
+  return res.status(201).json(new ApiResponse(201, product, "Product created successfully."));
 });
+
 
 
 const updateProduct = asyncHandler(async (req, res) => {
