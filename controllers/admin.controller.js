@@ -121,6 +121,8 @@ const createProduct = asyncHandler(async (req, res) => {
     images: imageUrls,
     video: videoUrl,
     category,
+    price,
+    sale_price,
     sub_category: sub_category || undefined,
     stock_quantity,
     brand,

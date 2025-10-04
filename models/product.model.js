@@ -43,7 +43,6 @@ const VariantSchema = new mongoose.Schema({
         type: String,
         required: true,
         trim: true,
-        unique: true // Ensures every SKU across all products is unique
     },
     price: { // Price for this specific variant
         type: Number,
