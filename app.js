@@ -15,7 +15,7 @@ console.log(
 const allowedOrigins = [
   "http://localhost:3000",
   "https://velvetvibe.vercel.app",
-  "https://www.velvetvibe.org"
+  "https://vedant-fe.vercel.app"
 ];
 
 app.use(cors({
