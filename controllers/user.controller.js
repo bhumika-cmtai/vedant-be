@@ -468,6 +468,8 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
 
 const placeCodOrder = asyncHandler(async (req, res) => {
   const { addressId, couponCode, pointsToRedeem } = req.body;
+  console.log("---couponCode, pointsToRedeem----")
+  console.log(couponCode, pointsToRedeem)
   
   if (!addressId) {
     throw new ApiError(400, "Shipping address ID is required.");
