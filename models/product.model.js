@@ -34,7 +34,7 @@ const ReviewSchema = new mongoose.Schema({
 
 
 const VariantSchema = new mongoose.Schema({
-    name: { // e.g., "10 ml", "30 ml", "Standard Size"
+    name: { // e.g., "10 ml", "07 days Healing", "41 days Healing"
         type: String,
         required: true,
         trim: true
@@ -61,6 +61,9 @@ const VariantSchema = new mongoose.Schema({
     },
     volume: { // The volume, if applicable
         type: Number
+    },
+    duration_in_days: {
+        type: Number
     }
 }, { _id: true });
 
@@ -70,6 +73,10 @@ const ProductSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Please provide a product name'],
         trim: true
+    },
+    type: {
+        type: String,
+        required: [true, 'Please provide type of product'],
     },
     slug: {
         type: String,
@@ -106,7 +113,7 @@ const ProductSchema = new mongoose.Schema({
     variants: [VariantSchema],
     brand: {
         type: String,
-        required: [true, 'Please provide a brand name'],
+        // required: [true, 'Please provide a brand name'],
         trim: true
     },
     gender: {

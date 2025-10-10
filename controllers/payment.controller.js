@@ -12,6 +12,7 @@ import Product from "../models/product.model.js";
 import { Coupon } from "../models/coupon.model.js";
 import { sendOrderConfirmationEmail } from "../services/emailService.js";
 import { WalletConfig } from "../models/walletConfig.model.js";
+import { TaxConfig } from "../models/taxConfig.model.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -222,7 +223,12 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     
           // --- Final Price Calculation (Correct) ---
           const shippingPrice = 90;
-          const taxRate = 0.03;
+          const taxConfig = await TaxConfig.findOne().session(session).lean();
+          if (!taxConfig) {
+              // Yeh ek fallback hai, agar DB mein koi config nahi hai to error dega.
+              throw new ApiError(500, "Tax configuration is not set up correctly.");
+          }
+          const taxRate = taxConfig.rate;
           const taxPrice = (subtotal - totalDiscount) > 0 ? (subtotal - totalDiscount) * taxRate : 0;
           const totalPrice = (subtotal - totalDiscount) + shippingPrice + taxPrice;
 

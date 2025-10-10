@@ -26,7 +26,7 @@ const createTransporter = () => {
  * @returns {string} - The full HTML content of the email
  */
 const generateEmailHTML = (subject, message, imageUrl) => {
-  const appName = process.env.APP_NAME || 'Velvetvibe';
+  const appName = process.env.APP_NAME || 'vedantgurukularoma';
   // Replace with your actual logo URL and social media links
   const logoUrl = 'https://testbucketecom12.s3.eu-north-1.amazonaws.com/products/1758225456056_ac5408fe41cf633c6c10e5afac303e74.jpg'; 
   const instagramUrl = '';
@@ -96,7 +96,7 @@ export const sendBulkEmail = async (emailList, subject, message, imageUrl) => {
     const emailHtml = generateEmailHTML(subject, message, imageUrl);
 
     const mailOptions = {
-      from: `"${process.env.APP_NAME || 'Velvetvibe'}" <${process.env.MAIL_USER}>`,
+      from: `"${process.env.APP_NAME || 'vedantgurukularoma'}" <${process.env.MAIL_USER}>`,
       to: process.env.MAIL_USER,
       bcc: validEmails,
       subject: subject,
@@ -125,7 +125,7 @@ export const sendBulkEmail = async (emailList, subject, message, imageUrl) => {
 };
 
 const generateOrderConfirmationHTML = (order) => {
-  const appName = process.env.APP_NAME || 'Velvetvibe';
+  const appName = process.env.APP_NAME || 'vedantgurukularoma';
   const logoUrl = 'https://testbucketecom12.s3.eu-north-1.amazonaws.com/products/1758225456056_ac5408fe41cf633c6c10e5afac303e74.jpg';
   const instagramUrl = '';
 
@@ -235,10 +235,10 @@ export const sendOrderConfirmationEmail = async (userEmail, order) => {
   try {
     const transporter = createTransporter();
     const emailHtml = generateOrderConfirmationHTML(order);
-    const subject = `Your ${process.env.APP_NAME || 'Velvetvibe'} Order Confirmation #${order._id}`;
+    const subject = `Your ${process.env.APP_NAME || 'vedantgurukularoma'} Order Confirmation #${order._id}`;
     
     const mailOptions = {
-      from: `"${process.env.APP_NAME || 'Velvetvibe'}" <${process.env.MAIL_USER}>`,
+      from: `"${process.env.APP_NAME || 'vedantgurukularoma'}" <${process.env.MAIL_USER}>`,
       to: userEmail,
       subject: subject,
       html: emailHtml,

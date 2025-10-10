@@ -79,7 +79,7 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
 const createProduct = asyncHandler(async (req, res) => {
   // --- Destructure all possible fields from the body ---
   const {
-    name, description, category, sub_category, brand, tags,
+    name,type ,description, category, sub_category, brand, tags,
     // Fields for SIMPLE products
     price, sale_price, stock_quantity, volume,
     // Field for VARIABLE products (will be a JSON string)
@@ -87,8 +87,9 @@ const createProduct = asyncHandler(async (req, res) => {
   } = req.body;
 
   // --- Basic Validation ---
-  if (!name || !description || !category || !brand) {
-    throw new ApiError(400, "Name, description, brand, and category are required.");
+  if (!name || !type || !description || !category ) {
+    console.log(name, type, description, category)
+    throw new ApiError(400, "Name, description,type, brand, and category are required.");
   }
 
   // --- File Upload Logic (no changes here) ---
@@ -116,6 +117,7 @@ const createProduct = asyncHandler(async (req, res) => {
   // --- Build the base product data object ---
   const productData = {
     name,
+    type,
     slug: slugify(name, { lower: true, strict: true }),
     description,
     images: imageUrls,
@@ -322,7 +324,7 @@ const deleteProduct = asyncHandler(async (req, res) => {
 
 const getAllProducts = asyncHandler(async (req, res) => {
   const {
-    page = 1, limit = 10, search, category, sub_category,
+    page = 1, limit = 10, search, category, type ,sub_category,
     gender, tags, color, fit, pattern, sleeveLength, neckType,
     minPrice, maxPrice, sort = 'newest', onSale
   } = req.query;
@@ -341,6 +343,7 @@ const getAllProducts = asyncHandler(async (req, res) => {
       { name: searchRegex },
       { description: searchRegex },
       { tags: searchRegex },
+      { type: searchRegex },
       { category: searchRegex },
       { sub_category: searchRegex },
       { brand: searchRegex },
@@ -351,6 +354,7 @@ const getAllProducts = asyncHandler(async (req, res) => {
 
   // --- FILTERING LOGIC ---
   if (category) query.category = { $in: category.split(',') };
+  if (type) query.type = { $in: type.split(',') };
   if (sub_category) query.sub_category = { $in: sub_category.split(',') };
   if (gender) query.gender = { $in: gender.split(',') };
   if (tags) query.tags = { $in: tags.split(',') };

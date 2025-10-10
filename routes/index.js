@@ -15,6 +15,10 @@ import walletRouter from './wallet.routes.js';
 import taxRouter from './tax.routes.js';
 import categoryRouter from './category.routes.js'
 import subcategoryRouter from './subcategory.routes.js'
+import blogRouter from './blog.routes.js'
+import grievanceRouter from './grievance.routes.js'
+import testimonialRouter from './testimonial.routes.js'
+import reelsRouter from './reel.routes.js'
 
 const router = Router();
 router.use("/auth", authRouter);
@@ -33,6 +37,10 @@ router.use("/wallet", walletRouter);
 router.use("/tax", taxRouter);
 router.use("/categories", categoryRouter);
 router.use("/subcategories", subcategoryRouter);
+router.use("/blogs", blogRouter);
+router.use("/grievances", grievanceRouter);
+router.use("/testimonials", testimonialRouter);
+router.use("/reels", reelsRouter);
 
 
 

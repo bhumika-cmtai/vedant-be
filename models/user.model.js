@@ -58,7 +58,7 @@ const cartItemSchema = new mongoose.Schema({
   },
   sku_variant: {
     type: String,
-    required: true,
+    // required: true,
   },
   quantity: {
     type: Number,
