@@ -86,6 +86,10 @@ const ProductSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Please provide a product description']
     },
+    userInputInstructions: {
+        type: String,
+        trim: true
+    },
     price: {
         type: Number,
         min: 0,

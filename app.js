@@ -14,7 +14,6 @@ console.log(
 // ✅ CORS middleware (corrected and complete)
 const allowedOrigins = [
   "http://localhost:3000",
-  "https://velvetvibe.vercel.app",
   "https://vedant-fe.vercel.app"
 ];
 
@@ -30,8 +29,8 @@ app.options("*", cors({
 }));
 
 // ✅ Body and cookie parsers
-app.use(express.json({ limit: "16kb" }));
-app.use(express.urlencoded({ extended: true, limit: "16kb" }));
+app.use(express.json({ limit: "10gb" }));
+app.use(express.urlencoded({ extended: true, limit: "10gb" }));
 app.use(cookieParser());
 
 // ✅ Static files

@@ -29,6 +29,11 @@ const orderSchema = new mongoose.Schema(
         sku_variant: { type: String },
         size: { type: String },
         color: { type: String },
+        
+        userInput: { 
+          type: String,
+          trim: true 
+      },
       },
     ],
     shippingAddress: {
@@ -55,7 +60,6 @@ const orderSchema = new mongoose.Schema(
       default: "Paid",
     },
 
-    
     paymentId: { type: String },
     razorpayOrderId: { type: String },
     paymentMethod: {

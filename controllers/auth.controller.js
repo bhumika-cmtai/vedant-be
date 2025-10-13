@@ -9,19 +9,15 @@ const generateOtp = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
 
 const registerUser = asyncHandler(async (req, res) => {
-  const { name, email, password, role } = req.body;
+  const { name, email, password,phone ,role } = req.body;
 
   if ([name, email, password].some((field) => !field || field.trim() === "")) {
-    throw new ApiError(400, "Name, email, and password are required");
+    throw new ApiError(400, "Name, email, phone and password are required");
   }
 
-  // --- Yahan se internal try...catch block hata diya gaya hai ---
-  
   const existingUser = await User.findOne({ email });
 
   if (existingUser) {
-    // Agar user pehle se hai, to seedha error bhejo.
-    // asyncHandler is error ko pakad kar client ko bhej dega.
     throw new ApiError(409, "User with this email already exists. Please login.");
   }
 
@@ -44,6 +40,7 @@ const registerUser = asyncHandler(async (req, res) => {
   await User.create({
     fullName: name,
     email,
+    phone,
     password,
     role: role && role.toLowerCase() === "admin" ? "admin" : "user",
     otp,

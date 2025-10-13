@@ -252,3 +252,107 @@ export const sendOrderConfirmationEmail = async (userEmail, order) => {
     // should not cause the main order placement process to fail.
   }
 };
+
+
+const generateAdminServiceNotificationHTML = (order) => {
+  const appName = process.env.APP_NAME || 'vedantgurukularoma';
+  const logoUrl = 'https://testbucketecom12.s3.eu-north-1.amazonaws.com/products/1758225456056_ac5408fe41cf633c6c10e5afac303e74.jpg'; // Your logo
+
+  // Filter for only the order items that are services and have user input
+  const serviceItems = order.orderItems.filter(item => item.userInput && item.userInput.trim() !== '');
+
+  // If no services with input were found, there's no need to send this email.
+  if (serviceItems.length === 0) {
+    return null;
+  }
+
+  const serviceItemsHTML = serviceItems.map(item => `
+    <div style="margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #ddd;">
+      <h3 style="margin: 0 0 10px 0; color: #333; font-size: 18px;">Service: ${item.product_name}</h3>
+      <div style="background-color: #f9f9f9; border: 1px solid #eee; border-radius: 5px; padding: 15px; font-size: 14px; color: #444;">
+        <h4 style="margin: 0 0 10px 0; color: #555;">User Provided Information:</h4>
+        <pre style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Courier New', Courier, monospace; margin: 0;">${item.userInput}</pre>
+      </div>
+    </div>
+  `).join('');
+
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden;">
+      <!-- Header -->
+      <div style="background-color: #e3f2fd; padding: 20px; text-align: center; border-bottom: 1px solid #ddd;">
+        <img src="${logoUrl}" alt="${appName} Logo" style="max-width: 150px;"/>
+        <h1 style="color: #1e88e5; margin-top: 10px;">New Service Order Received</h1>
+      </div>
+
+      <!-- Body -->
+      <div style="padding: 20px;">
+        <h2 style="color: #333;">Action Required</h2>
+        <p style="color: #555; font-size: 16px; line-height: 1.6;">
+          A new order containing services that require your attention has been placed. Please review the details below.
+        </p>
+        
+        <!-- Customer & Order Details -->
+        <div style="font-size: 14px; color: #555; margin-top: 20px; padding: 10px; background: #f8f8f8; border-radius: 5px;">
+          <p><strong>Order ID:</strong> ${order._id}</p>
+          <p><strong>Customer Name:</strong> ${order.shippingAddress.fullName}</p>
+        </div>
+        
+        <!-- Service Items Section -->
+        <div style="margin-top: 30px;">
+          ${serviceItemsHTML}
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div style="background-color: #f8f8f8; padding: 20px; text-align: center; border-top: 1px solid #ddd;">
+        <p style="color: #999; font-size: 12px; margin-top: 10px;">
+          This is an automated notification from the ${appName} website.
+        </p>
+      </div>
+    </div>
+  `;
+};
+
+
+/**
+ * Sends a notification to the admin when an order contains a service with user input.
+ * @param {object} order - The complete order object.
+ * @returns {Promise<void>}
+ */
+export const sendServiceNotificationToAdmin = async (order) => {
+  const adminEmail = process.env.ADMIN_EMAIL_RECIPIENT;
+
+  if (!adminEmail) {
+    console.warn("ADMIN_EMAIL_RECIPIENT not set in .env file. Skipping admin notification.");
+    return;
+  }
+  if (!order) {
+    console.error("sendServiceNotificationToAdmin: Missing order object.");
+    return;
+  }
+
+  try {
+    const emailHtml = generateAdminServiceNotificationHTML(order);
+
+    // If the HTML is null, it means there were no services with user input, so we stop.
+    if (!emailHtml) {
+      console.log(`Order #${order._id} has no services with user input. Skipping admin notification.`);
+      return;
+    }
+
+    const transporter = createTransporter();
+    const subject = `New Service Order #${order._id} - Action Required`;
+    
+    const mailOptions = {
+      from: `"${process.env.APP_NAME || 'vedantgurukularoma'} Notification" <${process.env.MAIL_USER}>`,
+      to: adminEmail,
+      subject: subject,
+      html: emailHtml,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Admin service notification sent to ${adminEmail}. Message ID: ${info.messageId}`);
+  } catch (error) {
+    console.error(`Failed to send admin service notification for Order #${order._id}:`, error);
+  }
+};

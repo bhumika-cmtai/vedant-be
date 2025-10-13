@@ -81,7 +81,7 @@ const createProduct = asyncHandler(async (req, res) => {
   const {
     name,type ,description, category, sub_category, brand, tags,
     // Fields for SIMPLE products
-    price, sale_price, stock_quantity, volume,
+    price, sale_price, stock_quantity, volume, userInputInstructions,
     // Field for VARIABLE products (will be a JSON string)
     variants 
   } = req.body;
@@ -120,6 +120,7 @@ const createProduct = asyncHandler(async (req, res) => {
     type,
     slug: slugify(name, { lower: true, strict: true }),
     description,
+    userInputInstructions,
     images: imageUrls,
     video: videoUrl,
     category,
@@ -188,7 +189,7 @@ const updateProduct = asyncHandler(async (req, res) => {
     name, description, category, brand, gender, tags,
     price, sale_price, stock_quantity,
     variants,
-    fit, careInstructions, sleeveLength, neckType, pattern,
+    fit, careInstructions, sleeveLength, neckType, pattern,userInputInstructions,
     imageOrder, // <-- New: A JSON string of the final image URLs/placeholders
   } = req.body;
 
@@ -198,6 +199,7 @@ const updateProduct = asyncHandler(async (req, res) => {
   // --- Step 1: Handle Text and Variant Data (Same as before) ---
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
+  if (userInputInstructions !== undefined) updateData.userInputInstructions = userInputInstructions;
   // ... (add all other non-file fields here)
   if (tags !== undefined) updateData.tags = String(tags).split(',').map(tag => tag.trim());
   if (price !== undefined) updateData.price = parseFloat(price);

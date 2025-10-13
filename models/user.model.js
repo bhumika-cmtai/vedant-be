@@ -76,6 +76,9 @@ const cartItemSchema = new mongoose.Schema({
   attributes: {
     type: Map,
     of: String,
+  },
+  type: {
+    type:String
   }
 }, { _id: true, timestamps: true });
 
@@ -94,6 +97,10 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
+    },
+    phone: {
+      type: String,
+      unique: true
     },
     password: {
       type: String,

@@ -10,7 +10,7 @@ import { Order } from "../models/order.model.js";
 import { User } from "../models/user.model.js";
 import Product from "../models/product.model.js";
 import { Coupon } from "../models/coupon.model.js";
-import { sendOrderConfirmationEmail } from "../services/emailService.js";
+import { sendOrderConfirmationEmail,sendServiceNotificationToAdmin  } from "../services/emailService.js";
 import { WalletConfig } from "../models/walletConfig.model.js";
 import { TaxConfig } from "../models/taxConfig.model.js";
 
@@ -139,7 +139,7 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
 
 
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode, pointsToRedeem } = req.body;
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode, pointsToRedeem, serviceInputs  } = req.body;
 
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !addressId) {
     throw new ApiError(400, "Missing required payment or address details.");
@@ -158,7 +158,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id)
       .populate({ 
         path: "cart.product",
-        select: "name stock_quantity variants images" // Simplified select
+        select: "name stock_quantity variants images type" // Simplified select
       })
       .session(session);
 
@@ -178,6 +178,11 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
       subtotal += item.price * item.quantity;
 
+      let userInputData = undefined;
+      if (item.product.type === 'service' && serviceInputs) {
+          userInputData = serviceInputs[item._id.toString()];
+      }
+
       orderItems.push({
         product_id: item.product._id,
         product_name: item.product.name,
@@ -185,6 +190,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         price_per_item: item.price,
         image: item.image || item.product.images[0],
         sku_variant: item.sku_variant, // This is correct, it's from the cart item
+        userInput: userInputData, 
       });
 
       if (item.sku_variant) {
@@ -275,6 +281,8 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     if (user.email) {
       sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
     }
+
+    sendServiceNotificationToAdmin(newOrder).catch(err => console.error("Failed to send admin service notification:", err));
 
     res.status(201).json(new ApiResponse(201, { order: newOrder }, "Payment verified & order placed successfully."));
   } catch (error) {

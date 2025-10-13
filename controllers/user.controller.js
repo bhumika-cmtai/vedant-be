@@ -58,12 +58,12 @@ const setDefaultAddress = asyncHandler(async (req, res) => {
 });
 
 const updateMyProfile = asyncHandler(async (req, res) => {
-  const { fullName, phone } = req.body;
+  const { fullName, phone, password } = req.body;
   const updatedUser = await User.findByIdAndUpdate(
     req.user._id,
-    { $set: { fullName, phone } },
+    { $set: { fullName, phone, password } },
     { new: true }
-  ).select("-password -refreshToken");
+  ).select("-refreshToken");
   res.status(200).json(new ApiResponse(200, updatedUser, "Profile updated successfully"));
 });
 
@@ -194,7 +194,7 @@ const getCart = asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id)
         .populate({ 
             path: "cart.product", 
-            select: "name base_price price images slug " 
+            select: "name base_price price images slug type userInputInstructions" 
         })
         .select("cart").lean();
 
