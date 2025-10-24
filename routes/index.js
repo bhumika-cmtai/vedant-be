@@ -19,6 +19,7 @@ import blogRouter from './blog.routes.js'
 import grievanceRouter from './grievance.routes.js'
 import testimonialRouter from './testimonial.routes.js'
 import reelsRouter from './reel.routes.js'
+import shippingRouter from './shipping.routes.js'
 
 const router = Router();
 router.use("/auth", authRouter);
@@ -41,7 +42,7 @@ router.use("/blogs", blogRouter);
 router.use("/grievances", grievanceRouter);
 router.use("/testimonials", testimonialRouter);
 router.use("/reels", reelsRouter);
-
+router.use("/shipping", shippingRouter);
 
 
 export default router;

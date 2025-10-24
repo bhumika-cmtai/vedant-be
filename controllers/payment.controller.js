@@ -11,6 +11,7 @@ import { User } from "../models/user.model.js";
 import Product from "../models/product.model.js";
 import { Coupon } from "../models/coupon.model.js";
 import { sendOrderConfirmationEmail,sendServiceNotificationToAdmin  } from "../services/emailService.js";
+import { createShiprocketOrder } from "../services/shippingService.js";
 import { WalletConfig } from "../models/walletConfig.model.js";
 import { TaxConfig } from "../models/taxConfig.model.js";
 
@@ -18,6 +19,98 @@ const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+
+
+/**
+ * @desc Helper function to create an order in Shiprocket after it's been created locally.
+ * @param {Order} order - The Mongoose order object.
+ * @param {string} userEmail - The email of the user who placed the order.
+ */
+// export const createShiprocketOrder = async (order, userEmail) => {
+//   try {
+//       console.log(`Step 1: Creating Shiprocket order for local order ID: ${order._id}`);
+
+//       const orderPayload = {
+//           order_id: order._id.toString(),
+//           order_date: order.createdAt,
+//           pickup_location: "Primary",
+//           billing_customer_name: order.shippingAddress.fullName.split(' ')[0],
+//           billing_last_name: order.shippingAddress.fullName.split(' ').slice(1).join(' ') || order.shippingAddress.fullName.split(' ')[0],
+//           billing_address: order.shippingAddress.street,
+//           billing_city: order.shippingAddress.city,
+//           billing_pincode: order.shippingAddress.postalCode,
+//           billing_state: order.shippingAddress.state,
+//           billing_country: order.shippingAddress.country,
+//           billing_email: userEmail,
+//           billing_phone: order.shippingAddress.phone,
+//           shipping_is_billing: true,
+//           order_items: order.orderItems.map(item => ({
+//               name: item.product_name,
+//               sku: item.sku_variant || item.product_id.toString(),
+//               units: item.quantity,
+//               selling_price: item.price_per_item,
+//               hsn: 441122,
+//           })),
+//           payment_method: order.paymentMethod === 'COD' ? "COD" : "Prepaid",
+//           sub_total: order.itemsPrice,
+//           length: 10,
+//           breadth: 10,
+//           height: 10,
+//           weight: 0.5
+//       };
+
+//       const { data: createOrderResponse } = await shiprocketApi.post('/orders/create/adhoc', orderPayload);
+      
+//       if (!createOrderResponse.order_id || !createOrderResponse.shipment_id) {
+//           console.warn(`Shiprocket API success, but no order_id/shipment_id returned for local order ${order._id}.`, createOrderResponse);
+//           return;
+//       }
+
+//       const shipmentId = createOrderResponse.shipment_id;
+//       console.log(`Step 2: Shiprocket order created [${createOrderResponse.order_id}]. Now generating AWB for shipment [${shipmentId}].`);
+
+//       const { data: awbResponse } = await shiprocketApi.post('/courier/assign/awb', { shipment_id: shipmentId });
+
+//       if (!awbResponse.response?.data?.awb_code) {
+//           console.error(`Failed to auto-generate AWB for shipment ${shipmentId}. Message:`, awbResponse.message);
+//           await Order.findByIdAndUpdate(order._id, { $set: { "shipmentDetails.shiprocketOrderId": createOrderResponse.order_id, "shipmentDetails.shiprocketShipmentId": shipmentId } });
+//           return;
+//       }
+      
+//       const awbData = awbResponse.response.data;
+//       console.log(`Step 3: AWB [${awbData.awb_code}] generated. Now scheduling pickup...`);
+
+//       const { data: pickupResponse } = await shiprocketApi.post('/courier/generate/pickup', {
+//           shipment_id: [shipmentId]
+//       });
+
+//       if (pickupResponse.pickup_status !== "scheduled") {
+//            console.warn(`Pickup scheduling failed or was queued for shipment ${shipmentId}. Status:`, pickupResponse.data);
+//       } else {
+//           console.log(`Step 4: Pickup successfully scheduled for shipment ${shipmentId}.`);
+//       }
+
+//       console.log(`Step 5: Updating local database with all shipment details.`);
+//       await Order.findByIdAndUpdate(order._id, {
+//           $set: {
+//               "orderStatus": "Shipped",
+//               "shipmentDetails.shiprocketOrderId": createOrderResponse.order_id,
+//               "shipmentDetails.shiprocketShipmentId": shipmentId,
+//               "shipmentDetails.trackingNumber": awbData.awb_code,
+//               "shipmentDetails.courier": awbData.courier_name,
+//               "shipmentDetails.trackingUrl": awbData.awb_code_url,
+//           }
+//       });
+
+//       console.log(`Order ${order._id} fully automated and marked as Shipped.`);
+      
+//   } catch (error) {
+//       console.error(`CRITICAL ERROR during Shiprocket automation for local order ${order._id}.`);
+//       console.error("Error Response:", error.response?.data || error.message);
+//   }
+// };
+
+
 
 // Helper function for Razorpay refunds
 const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
@@ -47,7 +140,7 @@ const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
 
 // API Controllers
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
-  const { addressId, couponCode, pointsToRedeem } = req.body;
+  const { addressId, couponCode, pointsToRedeem,shippingPrice  } = req.body;
 
   if (!addressId) {
     throw new ApiError(400, "An Address ID is required to create an order.");
@@ -111,7 +204,7 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   
   const totalDiscount = couponDiscount + walletDiscount;
   
-  const shippingPrice = 90;
+  // const shippingPrice = 90;
   const taxConfig = await TaxConfig.findOne().lean();
   const taxRate = taxConfig?.rate || 0; // Default to 0 if not configured
   const taxableAmount = Math.max(0, backendSubtotal - totalDiscount);
@@ -139,7 +232,7 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
 
 
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode, pointsToRedeem, serviceInputs  } = req.body;
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode, pointsToRedeem, serviceInputs, shippingPrice   } = req.body;
 
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !addressId) {
     throw new ApiError(400, "Missing required payment or address details.");
@@ -257,26 +350,28 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
           const totalPrice = (subtotal - totalDiscount) + shippingPrice + taxPrice;
 
     const [newOrder] = await Order.create([{
-        user: req.user._id,
-        orderItems,
-        shippingAddress: selectedAddress.toObject(),
-        itemsPrice: subtotal,
-        shippingPrice,
-        taxPrice,
-        discountAmount: totalDiscount,
-        totalPrice,
-        couponCode: validatedCouponCode,
-        paymentId: razorpay_payment_id,
-        razorpayOrderId: razorpay_order_id,
-        paymentMethod: "Razorpay",
-        orderStatus: "Processing",
-    }], { session });
+      user: req.user._id,
+      orderItems,
+      shippingAddress: selectedAddress.toObject(),
+      itemsPrice: subtotal,
+      shippingPrice, 
+      taxPrice,
+      discountAmount: totalDiscount,
+      totalPrice,
+      couponCode: validatedCouponCode,
+      paymentId: razorpay_payment_id,
+      razorpayOrderId: razorpay_order_id,
+      paymentMethod: "Razorpay",
+      orderStatus: "Paid", // The order is paid and ready to be processed
+  }], { session });
 
     await Product.bulkWrite(stockUpdateOperations, { session });
     user.cart = [];
     await user.save({ session, validateBeforeSave: false });
 
     await session.commitTransaction();
+    
+    await createShiprocketOrder(newOrder, user.email);
 
     if (user.email) {
       sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));

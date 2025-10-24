@@ -14,7 +14,9 @@ import {
   deleteUser,
   getUserOrders,
   getAllAdminOrders,
-  getSingleAdminOrder
+  getSingleAdminOrder,
+  generateAWB,
+  schedulePickupForOrder
 } from "../controllers/admin.controller.js";
 import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { adminMiddleware } from "../middlewares/admin.middleware.js";
@@ -80,6 +82,9 @@ router
 router.route("/users/:userId/orders").get(getUserOrders);
 
 router.route("/orders/:orderId").get(getSingleAdminOrder);
+
+router.route("/shipping/generate-awb").post(generateAWB);
+router.route("/shipping/schedule-pickup").post(schedulePickupForOrder); 
 
 
 export default router;

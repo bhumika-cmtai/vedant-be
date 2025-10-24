@@ -4,10 +4,127 @@ import { ApiError } from "../utils/ApiError.js";
 import { Order } from "../models/order.model.js";
 import { User } from "../models/user.model.js";
 import Product from "../models/product.model.js";
+import { shiprocketApi } from "../utils/shiprocketService.js";
 import { deleteFromCloudinary, getPublicIdFromUrl, uploadOnCloudinary } from "../config/cloudinary.js";
 import { uploadOnS3, deleteFromS3, getObjectKeyFromUrl } from "../config/s3.js";
 import mongoose from "mongoose";
 import slugify from "slugify";
+
+/**
+ * @desc Generate AWB and assign a courier for a shipment
+ * @route POST /api/v1/admin/shipping/generate-awb
+ * @access Admin
+ */
+const generateAWB = asyncHandler(async (req, res) => {
+  const { shipmentId } = req.body; // This is the shiprocketShipmentId from your order model
+
+  if (!shipmentId) {
+      throw new ApiError(400, "Shiprocket Shipment ID is required.");
+  }
+
+  // Call Shiprocket to assign a courier and get an AWB
+  const { data: awbResponse } = await shiprocketApi.post('/courier/assign/awb', {
+      shipment_id: shipmentId
+  });
+
+  // Check for Shiprocket's specific success indicator
+  if (!awbResponse.response?.data?.awb_code) {
+      throw new ApiError(400, "Failed to assign AWB. Shiprocket Reason: " + (awbResponse.message || "Unknown error"));
+  }
+
+  const awbData = awbResponse.response.data;
+
+  // Find our order and update it with the new shipping details
+  const updatedOrder = await Order.findOneAndUpdate(
+      { "shipmentDetails.shiprocketShipmentId": shipmentId },
+      {
+          $set: {
+              "orderStatus": "Shipped", // AUTOMATICALLY update the status
+              "shipmentDetails.trackingNumber": awbData.awb_code,
+              "shipmentDetails.courier": awbData.courier_name,
+              "shipmentDetails.trackingUrl": awbData.awb_code_url, // URL for tracking page
+          }
+      },
+      { new: true } // Return the updated document
+  ).populate("user", "fullName email")
+   .populate("orderItems.product_id", "name images price slug");
+
+  if (!updatedOrder) {
+      throw new ApiError(404, "Order not found in DB to update after AWB generation.");
+  }
+
+  // You can add email/SMS notification logic here to inform the customer their order has shipped.
+
+  return res.status(200).json(new ApiResponse(200, updatedOrder, "AWB generated and order status updated to 'Shipped'."));
+});
+
+
+const schedulePickupForOrder = asyncHandler(async (req, res) => {
+  const { shipmentId } = req.body;
+
+  if (!shipmentId) {
+      throw new ApiError(400, "Shiprocket Shipment ID is required to schedule a pickup.");
+  }
+
+  try {
+      // --- THIS IS THE FIX ---
+      // 1. Define the payload as a standard JavaScript object.
+      // The Shiprocket API for this endpoint expects an object with a key 'shipment_id' that holds an ARRAY of strings.
+      const payload = {
+          shipment_id: [shipmentId] 
+      };
+
+      // 2. Make the API call. Our `shiprocketApi` instance is already configured to send JSON.
+      const { data: pickupResponse } = await shiprocketApi.post(
+          '/courier/generate/pickup', 
+          payload
+      );
+      // --- END OF FIX ---
+      console.log("-----pickupResponse----",pickupResponse)
+
+      // Check for Shiprocket's success response structure
+      if (!pickupResponse || pickupResponse.pickup_status !== "scheduled") {
+          console.warn(`Pickup scheduling failed or was queued for shipment ${shipmentId}. Response:`, pickupResponse);
+          const shiprocketMessage = pickupResponse?.message || "Failed to schedule pickup with Shiprocket.";
+          throw new ApiError(400, shiprocketMessage);
+      }
+
+      console.log(`Pickup successfully scheduled for shipment ${shipmentId}. Response:`, pickupResponse);
+
+      return res.status(200).json(new ApiResponse(200, pickupResponse, "Pickup scheduled successfully."));
+
+  } catch (error) {
+    console.log("error", error)
+      // This will now provide a clear error message from Shiprocket's response if the request fails.
+      const errorMessage = error.response?.data?.message || error.message || "Failed to schedule pickup with the shipping partner.";
+      console.error("Schedule Pickup Error:", error.response?.data || error.message);
+      throw new ApiError(error.statusCode || 500, errorMessage);
+  }
+});
+
+
+
+/**
+* @desc Track a shipment using its AWB code
+* @route GET /api/v1/admin/shipping/track/:awb
+* @access Admin
+*/
+const trackShipmentByAWB = asyncHandler(async (req, res) => {
+  const { awb } = req.params;
+
+  if (!awb) {
+      throw new ApiError(400, "AWB code is required.");
+  }
+
+  const { data } = await shiprocketApi.get(`/courier/track/awb/${awb}`);
+
+  if (data.tracking_data.track_status !== 1) {
+      throw new ApiError(404, "Could not find tracking data for this AWB.");
+  }
+
+  return res.status(200).json(new ApiResponse(200, data.tracking_data, "Tracking data fetched."));
+});
+
 
 const getAdminDashboardStats = asyncHandler(async (req, res) => {
   const [totalSalesData, newOrdersCount, activeUsersCount] = await Promise.all([
@@ -79,20 +196,20 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
 const createProduct = asyncHandler(async (req, res) => {
   // --- Destructure all possible fields from the body ---
   const {
-    name,type ,description, category, sub_category, brand, tags,
-    // Fields for SIMPLE products
+    name, type, description, category, sub_category, brand, tags,
+    // Fields for SIMPLE products - stock_quantity is now optional at this stage
     price, sale_price, stock_quantity, volume, userInputInstructions,
+    weight, length, breadth, height,
     // Field for VARIABLE products (will be a JSON string)
     variants 
   } = req.body;
 
   // --- Basic Validation ---
   if (!name || !type || !description || !category ) {
-    console.log(name, type, description, category)
-    throw new ApiError(400, "Name, description,type, brand, and category are required.");
+    throw new ApiError(400, "Name, description, type, and category are required.");
   }
 
-  // --- File Upload Logic (no changes here) ---
+  // --- File Upload Logic (no changes here, this part is likely fine) ---
   const imageFiles = req.files?.images;
   const videoFile = req.files?.video?.[0];
 
@@ -111,10 +228,11 @@ const createProduct = asyncHandler(async (req, res) => {
   const imageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
 
   if (imageUrls.length !== imageFiles.length) {
+    // This error is a symptom, not the cause. But we leave it for now.
     throw new ApiError(500, "Error occurred while uploading some images.");
   }
 
-  // --- Build the base product data object ---
+  // --- Build the base product data object (WITHOUT stock_quantity initially) ---
   const productData = {
     name,
     type,
@@ -124,46 +242,59 @@ const createProduct = asyncHandler(async (req, res) => {
     images: imageUrls,
     video: videoUrl,
     category,
-    price,
-    sale_price,
     sub_category: sub_category || undefined,
-    stock_quantity,
     brand,
     tags: tags ? String(tags).split(',').map(tag => tag.trim()) : [],
+    // NOTE: price, stock_quantity, and dimensions are now set conditionally below
   };
 
   // --- CORE LOGIC: Handle Variants vs. Simple Product ---
-  const isVariableProduct = !!variants;
+  const isVariableProduct = variants && variants !== '[]';
 
   if (isVariableProduct) {
     try {
       const parsedVariants = JSON.parse(variants);
+      let totalStock = 0;
       
       // Validate each variant
       for (const variant of parsedVariants) {
-        if (!variant.name || !variant.sku || !variant.price || variant.stock_quantity === undefined) {
-          throw new ApiError(400, "Each variant must have a Name, SKU, Price, and Stock Quantity.");
+        if (!variant.name || !variant.sku || variant.price === undefined || variant.stock_quantity === undefined ||
+            !variant.weight || !variant.length || !variant.breadth || !variant.height) {
+          throw new ApiError(400, "Each variant must have Name, SKU, Price, Stock, Weight, Length, Breadth, and Height.");
         }
+        totalStock += Number(variant.stock_quantity || 0);
       }
+      
       productData.variants = parsedVariants;
-      // Note: The Mongoose pre-save hook will automatically calculate the total stock and set the main price.
+      // --- THE FIX: Calculate and set stock_quantity for variable products ---
+      productData.stock_quantity = totalStock;
+      // Set the main price to the price of the first variant for display purposes
+      productData.price = parsedVariants[0]?.price || 0;
+
     } catch (e) {
       if (e instanceof ApiError) throw e;
       throw new ApiError(400, "Invalid variants JSON format received.");
     }
   } else {
     // This is a SIMPLE product
-    if (!price || stock_quantity === undefined) {
-      throw new ApiError(400, "Price and Stock Quantity are required for simple products.");
+    if (price === undefined || stock_quantity === undefined || !weight || !length || !breadth || !height) {
+      throw new ApiError(400, "Price, Stock, Weight, Length, Breadth, and Height are required for simple products.");
     }
+
+    // --- THE FIX: Set all properties for simple products here ---
     productData.price = parseFloat(price);
     productData.sale_price = sale_price ? parseFloat(sale_price) : undefined;
     productData.stock_quantity = parseInt(stock_quantity, 10);
     productData.volume = volume ? parseInt(volume, 10) : undefined;
+    productData.weight = parseFloat(weight);
+    productData.length = parseFloat(length);
+    productData.breadth = parseFloat(breadth);
+    productData.height = parseFloat(height);
     productData.variants = []; // Ensure variants array is empty
   }
 
   // --- Create the product in the database ---
+  // Now, `productData` will always have a valid `stock_quantity` before this step
   const product = await Product.create(productData);
   if (!product) {
     throw new ApiError(500, "Database error: Could not create the product.");
@@ -171,7 +302,6 @@ const createProduct = asyncHandler(async (req, res) => {
 
   return res.status(201).json(new ApiResponse(201, product, "Product created successfully."));
 });
-
 
 
 const updateProduct = asyncHandler(async (req, res) => {
@@ -190,6 +320,7 @@ const updateProduct = asyncHandler(async (req, res) => {
     price, sale_price, stock_quantity,
     variants,
     fit, careInstructions, sleeveLength, neckType, pattern,userInputInstructions,
+    weight, length, breadth, height,
     imageOrder, // <-- New: A JSON string of the final image URLs/placeholders
   } = req.body;
 
@@ -603,17 +734,29 @@ const getUserOrders = asyncHandler(async (req, res) => {
 const getAllAdminOrders = asyncHandler(async (req, res) => {
   // --- PAGINATION LOGIC ---
   const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 10; // Show 10 orders per page
+  const limit = parseInt(req.query.limit, 10) || 10;
   const skip = (page - 1) * limit;
 
-  // Get total count of orders for pagination info
-  const totalOrders = await Order.countDocuments();
+  // --- SEARCH & FILTER LOGIC ---
+  const { searchQuery } = req.query;
+  const filter = {}; // Start with an empty filter object
 
-  const orders = await Order.find({})
-    .populate("user", "fullName") // Ensure you are populating fullName
+  // If a valid Order ID is provided as a search query, add it to the filter
+  if (searchQuery && mongoose.Types.ObjectId.isValid(searchQuery)) {
+      filter._id = searchQuery;
+  }
+
+  // Get total count of orders that match the filter for pagination info
+  const totalOrders = await Order.countDocuments(filter);
+
+  // Find orders matching the filter with pagination
+  const orders = await Order.find(filter)
+    .populate("user", "fullName")
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit);
+
+    // console.log('---orders---', orders)
 
   return res
     .status(200)
@@ -689,4 +832,7 @@ export {
   getUserOrders,
   updateOrderStatus,
   getAllAdminOrders,
+  generateAWB,
+  trackShipmentByAWB,
+  schedulePickupForOrder
 };

@@ -7,11 +7,13 @@ import Product  from "../models/product.model.js";
 import { Coupon } from "../models/coupon.model.js";
 import { uploadOnS3, deleteFromS3, getObjectKeyFromUrl } from "../config/s3.js";
 import { sendOrderConfirmationEmail } from "../services/emailService.js";
+import { createShiprocketOrder } from "../services/shippingService.js";
 import { TaxConfig } from "../models/taxConfig.model.js";
 import { WalletConfig } from "../models/walletConfig.model.js";
 
 import fs from "fs";
 import mongoose from "mongoose";
+import { type } from "os";
 
 // --- No Changes Needed in Profile & Address Management ---
 // Yeh functions products ya cart se direct deal nahi karte, isliye inme koi badlaav nahi hai.
@@ -187,7 +189,6 @@ const mergeLocalWishlist = asyncHandler(async (req, res) => {
   res.status(200).json(new ApiResponse(200, updatedUser.wishlist, "Wishlist merged successfully"));
 });
 
-// --- CRITICAL CHANGES: Cart Management for Variants ---
 
 const getCart = asyncHandler(async (req, res) => {
     // --- EDITED: Populate path changed to 'product_id' ---
@@ -204,7 +205,6 @@ const getCart = asyncHandler(async (req, res) => {
 
 
 const addToCart = asyncHandler(async (req, res) => {
-  // sku_variant is now optional
   const { productId, sku_variant, quantity = 1 } = req.body;
   
   if (!productId) {
@@ -225,14 +225,12 @@ const addToCart = asyncHandler(async (req, res) => {
   let cartItemData;
   let itemIndex;
 
-  // --- MAIN FIX: Check if product has variants ---
   if (product.variants && product.variants.length > 0) {
-    // --- Case 1: Variable Product (has variants) ---
     if (!sku_variant) {
       throw new ApiError(400, "Please select a variant (e.g., size/volume).");
     }
 
-    // 🔥 FIX: Use 'sku' instead of 'sku_variant' to match model
+    
     const variant = product.variants.find(v => v.sku === sku_variant);
     
     if (!variant) {
@@ -243,12 +241,10 @@ const addToCart = asyncHandler(async (req, res) => {
       throw new ApiError(400, `Not enough stock. Only ${variant.stock_quantity} left.`);
     }
 
-    // Check if this variant is already in cart
     itemIndex = user.cart.findIndex(item =>
       item.product.toString() === productId && item.sku_variant === sku_variant
     );
 
-    // Prepare cart data
     cartItemData = {
       product: productId,
       sku_variant: variant.sku, // Store the sku
@@ -259,15 +255,13 @@ const addToCart = asyncHandler(async (req, res) => {
         name: variant.name,
         volume: variant.volume,
         duration_in_days: variant.duration_in_days
-      }
+      } 
     };
   } else {
-    // --- Case 2: Simple Product (no variants) ---
     if (product.stock_quantity < quantity) {
       throw new ApiError(400, `Not enough stock. Only ${product.stock_quantity} left.`);
     }
 
-    // Check if this simple product is already in cart
     itemIndex = user.cart.findIndex(item =>
       item.product.toString() === productId && !item.sku_variant
     );
@@ -280,7 +274,6 @@ const addToCart = asyncHandler(async (req, res) => {
     };
   }
 
-  // Add or update cart
   if (itemIndex > -1) {
     user.cart[itemIndex].quantity += quantity;
   } else {
@@ -289,11 +282,10 @@ const addToCart = asyncHandler(async (req, res) => {
 
   await user.save({ validateBeforeSave: false });
 
-  // Return updated cart
   const updatedCart = await User.findById(req.user._id)
     .populate({
       path: "cart.product",
-      select: "name slug images variants"
+      select: "name slug images variants type"
     })
     .select("cart")
     .lean();
@@ -455,7 +447,7 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
 
   const updatedCart = await user.populate({
     path: "cart.product",
-    select: "name slug images variants"
+    select: "name slug images variants type"
   });
 
   res.status(200).json(
@@ -464,16 +456,18 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
 });
 
 
-// --- CRITICAL CHANGES: Order Management for Variants ---
 
 const placeCodOrder = asyncHandler(async (req, res) => {
-  const { addressId, couponCode, pointsToRedeem } = req.body;
-  console.log("---couponCode, pointsToRedeem----")
-  console.log(couponCode, pointsToRedeem)
+  const { addressId, couponCode, pointsToRedeem, shippingPrice} = req.body;
   
   if (!addressId) {
     throw new ApiError(400, "Shipping address ID is required.");
   }
+
+   // --- MODIFIED: Add validation for the received shipping price ---
+   if (typeof shippingPrice !== 'number' || shippingPrice < 0) {
+    throw new ApiError(400, "A valid shipping price must be provided.");
+}
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -568,7 +562,7 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       const totalDiscount = couponDiscount + walletDiscount;
 
       // --- Final Price Calculation (Correct) ---
-      const shippingPrice = 90;
+      // const shippingPrice = 90;
       const taxConfig = await TaxConfig.findOne().session(session).lean();
       if (!taxConfig) {
           // Yeh ek fallback hai, agar DB mein koi config nahi hai to error dega.
@@ -618,6 +612,8 @@ const placeCodOrder = asyncHandler(async (req, res) => {
       // --- Final Database Operations ---
       await Product.bulkWrite(stockUpdates, { session });
       await session.commitTransaction();
+      await createShiprocketOrder(newOrder, user.email);
+
 
       if (user.email) {
           sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error(err));

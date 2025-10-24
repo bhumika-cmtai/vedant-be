@@ -64,7 +64,30 @@ const VariantSchema = new mongoose.Schema({
     },
     duration_in_days: {
         type: Number
+    },
+
+
+    weight: {
+        type: Number, // Weight in kg
+        required: [true, 'Please provide a weight for the variant.'],
+        min: 0
+    },
+    length: {
+        type: Number, // Dimensions in cm
+        required: [true, 'Please provide a length for the variant.'],
+        min: 0
+    },
+    breadth: {
+        type: Number, // Dimensions in cm
+        required: [true, 'Please provide a breadth for the variant.'],
+        min: 0
+    },
+    height: {
+        type: Number, // Dimensions in cm
+        required: [true, 'Please provide a height for the variant.'],
+        min: 0
     }
+
 }, { _id: true });
 
 
@@ -138,6 +161,28 @@ const ProductSchema = new mongoose.Schema({
         default: true
     },
     volume: {type: Number},
+
+
+    weight: {
+        type: Number, // Weight in kg
+        required: [true, 'Please provide a weight for the variant.'],
+        min: 0
+    },
+    length: {
+        type: Number, // Dimensions in cm
+        required: [true, 'Please provide a length for the variant.'],
+        min: 0
+    },
+    breadth: {
+        type: Number, // Dimensions in cm
+        required: [true, 'Please provide a breadth for the variant.'],
+        min: 0
+    },
+    height: {
+        type: Number, // Dimensions in cm
+        required: [true, 'Please provide a height for the variant.'],
+        min: 0
+    },
 
     // --- New Fields for Reviews ---
     reviews: [ReviewSchema], // Array to store all reviews

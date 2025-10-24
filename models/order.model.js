@@ -69,9 +69,16 @@ const orderSchema = new mongoose.Schema(
       default: "Razorpay",
     },
     shipmentDetails: {
-      shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Shipment" },
+      // This is the Shiprocket Shipment ID, used for most operations
+      shiprocketShipmentId: { type: String },
+      // This is the Shiprocket Order ID, mainly for reference
+      shiprocketOrderId: { type: String },
+      // This is the AWB (Air Waybill) / Tracking Number
       trackingNumber: { type: String },
+      // Name of the courier company (e.g., Delhivery, XpressBees)
       courier: { type: String },
+      // Direct tracking URL you can provide to the customer
+      trackingUrl: { type: String },
     },
     refundDetails: {
       refundId: String,
