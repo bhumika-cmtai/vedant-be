@@ -34,7 +34,7 @@ const checkServiceability = asyncHandler(async (req, res) => {
                 cod: 1, // Check for both prepaid and COD
             }
         });
-        console.log("---- response ----",response)
+        // console.log("---- response ----",response)
         const data = response.data.data;
 
         if (response.data.status !== 200 || data.available_courier_companies?.length === 0) {

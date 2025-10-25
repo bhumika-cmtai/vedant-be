@@ -209,7 +209,7 @@ const createProduct = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Name, description, type, and category are required.");
   }
 
-  // --- File Upload Logic (no changes here, this part is likely fine) ---
+  // --- File Upload Logic ---
   const imageFiles = req.files?.images;
   const videoFile = req.files?.video?.[0];
 
@@ -228,11 +228,10 @@ const createProduct = asyncHandler(async (req, res) => {
   const imageUrls = uploadedImages.map(result => result?.url).filter(Boolean);
 
   if (imageUrls.length !== imageFiles.length) {
-    // This error is a symptom, not the cause. But we leave it for now.
     throw new ApiError(500, "Error occurred while uploading some images.");
   }
 
-  // --- Build the base product data object (WITHOUT stock_quantity initially) ---
+  // --- Build the base product data object ---
   const productData = {
     name,
     type,
@@ -245,7 +244,6 @@ const createProduct = asyncHandler(async (req, res) => {
     sub_category: sub_category || undefined,
     brand,
     tags: tags ? String(tags).split(',').map(tag => tag.trim()) : [],
-    // NOTE: price, stock_quantity, and dimensions are now set conditionally below
   };
 
   // --- CORE LOGIC: Handle Variants vs. Simple Product ---
@@ -266,10 +264,19 @@ const createProduct = asyncHandler(async (req, res) => {
       }
       
       productData.variants = parsedVariants;
-      // --- THE FIX: Calculate and set stock_quantity for variable products ---
+      
+      // Calculate and set stock_quantity for the parent product
       productData.stock_quantity = totalStock;
       // Set the main price to the price of the first variant for display purposes
       productData.price = parsedVariants[0]?.price || 0;
+
+      // --- FIX: Set top-level dimensions from the first variant ---
+      const firstVariant = parsedVariants[0];
+      productData.weight = firstVariant.weight;
+      productData.length = firstVariant.length;
+      productData.breadth = firstVariant.breadth;
+      productData.height = firstVariant.height;
+      // --- END FIX ---
 
     } catch (e) {
       if (e instanceof ApiError) throw e;
@@ -281,7 +288,7 @@ const createProduct = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Price, Stock, Weight, Length, Breadth, and Height are required for simple products.");
     }
 
-    // --- THE FIX: Set all properties for simple products here ---
+    // Set all properties for simple products here
     productData.price = parseFloat(price);
     productData.sale_price = sale_price ? parseFloat(sale_price) : undefined;
     productData.stock_quantity = parseInt(stock_quantity, 10);
@@ -294,7 +301,6 @@ const createProduct = asyncHandler(async (req, res) => {
   }
 
   // --- Create the product in the database ---
-  // Now, `productData` will always have a valid `stock_quantity` before this step
   const product = await Product.create(productData);
   if (!product) {
     throw new ApiError(500, "Database error: Could not create the product.");
@@ -302,7 +308,6 @@ const createProduct = asyncHandler(async (req, res) => {
 
   return res.status(201).json(new ApiResponse(201, product, "Product created successfully."));
 });
-
 
 const updateProduct = asyncHandler(async (req, res) => {
   const { productId } = req.params;
@@ -316,51 +321,80 @@ const updateProduct = asyncHandler(async (req, res) => {
   }
 
   const {
-    name, description, category, brand, gender, tags,
-    price, sale_price, stock_quantity,
-    variants,
-    fit, careInstructions, sleeveLength, neckType, pattern,userInputInstructions,
+    name, description, category, sub_category, brand, tags,
+    price, sale_price, stock_quantity, volume,
+    variants, userInputInstructions,
+    // Destructure dimensional fields
     weight, length, breadth, height,
-    imageOrder, // <-- New: A JSON string of the final image URLs/placeholders
+    imageOrder,
   } = req.body;
 
   const updateData = {};
   const unsetData = {};
 
-  // --- Step 1: Handle Text and Variant Data (Same as before) ---
+  // --- Step 1: Handle Text and Variant Data ---
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
   if (userInputInstructions !== undefined) updateData.userInputInstructions = userInputInstructions;
-  // ... (add all other non-file fields here)
+  if (category !== undefined) updateData.category = category;
+  if (sub_category !== undefined) updateData.sub_category = sub_category;
+  if (brand !== undefined) updateData.brand = brand;
   if (tags !== undefined) updateData.tags = String(tags).split(',').map(tag => tag.trim());
-  if (price !== undefined) updateData.price = parseFloat(price);
   
-  // Handle variants vs. simple stock
+  // Handle variants vs. simple product fields
   if (variants !== undefined) {
     try {
       const parsedVariants = JSON.parse(variants);
       let totalStock = 0;
-      parsedVariants.forEach(v => { totalStock += Number(v.stock_quantity) || 0; });
+      parsedVariants.forEach(v => { 
+        // Basic validation for variants
+        if (!v.name || !v.sku || v.price === undefined || v.stock_quantity === undefined ||
+            !v.weight || !v.length || !v.breadth || !v.height) {
+          throw new ApiError(400, "Each variant must have Name, SKU, Price, Stock, Weight, Length, Breadth, and Height.");
+        }
+        totalStock += Number(v.stock_quantity) || 0; 
+      });
+
       updateData.variants = parsedVariants;
       updateData.stock_quantity = totalStock;
+
+      // --- FIX: Update parent product fields from the first variant ---
+      const firstVariant = parsedVariants[0] || {};
+      updateData.price = firstVariant.price || 0;
+      updateData.sale_price = firstVariant.sale_price;
+      updateData.weight = firstVariant.weight;
+      updateData.length = firstVariant.length;
+      updateData.breadth = firstVariant.breadth;
+      updateData.height = firstVariant.height;
+      // --- END FIX ---
+
     } catch (e) { 
+      if (e instanceof ApiError) throw e;
       throw new ApiError(400, "Invalid variants JSON format.");
     }
   } else {
-    if (stock_quantity !== undefined) {
-      updateData.stock_quantity = parseInt(stock_quantity, 10);
-    }
-    unsetData.variants = 1;
+    // This is a SIMPLE product
+    if (price !== undefined) updateData.price = parseFloat(price);
+    if (sale_price !== undefined) updateData.sale_price = parseFloat(sale_price);
+    if (stock_quantity !== undefined) updateData.stock_quantity = parseInt(stock_quantity, 10);
+    if (volume !== undefined) updateData.volume = parseInt(volume, 10);
+    
+    // --- FIX: Add dimensional fields for simple products ---
+    if (weight !== undefined) updateData.weight = parseFloat(weight);
+    if (length !== undefined) updateData.length = parseFloat(length);
+    if (breadth !== undefined) updateData.breadth = parseFloat(breadth);
+    if (height !== undefined) updateData.height = parseFloat(height);
+    // --- END FIX ---
+
+    // Ensure variants array is unset if switching from variable to simple
+    unsetData.variants = ""; 
   }
 
-
-  // --- Step 2: Handle Granular Image Updates ---
-  const newImageFiles = req.files?.images; // These are only the NEWLY uploaded files
+  // --- Step 2: Handle Granular Image Updates (Your existing logic is fine) ---
+  const newImageFiles = req.files?.images;
 
   if (imageOrder) {
-    const finalImageOrder = JSON.parse(imageOrder); // The desired final array of URLs
-    
-    // 1. Determine which old images to delete from S3
+    const finalImageOrder = JSON.parse(imageOrder);
     const originalUrls = product.images || [];
     const urlsToDelete = originalUrls.filter(url => !finalImageOrder.includes(url));
     
@@ -369,7 +403,6 @@ const updateProduct = asyncHandler(async (req, res) => {
       await Promise.all(deletionPromises);
     }
 
-    // 2. Upload the new images that were sent
     let newUploadedUrls = [];
     if (newImageFiles && newImageFiles.length > 0) {
       const uploadPromises = newImageFiles.map(file => uploadOnS3(file.path, "products"));
@@ -377,21 +410,17 @@ const updateProduct = asyncHandler(async (req, res) => {
       newUploadedUrls = uploadResults.map(result => result?.url).filter(Boolean);
     }
     
-    // 3. Construct the final 'images' array for the database
     let newUrlIndex = 0;
-    const finalDbImageArray = finalImageOrder.map((item) => {
-      // If the item is a placeholder for a new file, replace it with the new S3 URL
-      if (item === 'NEW_FILE_PLACEHOLDER' && newUrlIndex < newUploadedUrls.length) {
-        return newUploadedUrls[newUrlIndex++];
-      }
-      // Otherwise, it's an existing URL, so keep it
-      return item;
-    }).filter(item => item !== 'NEW_FILE_PLACEHOLDER'); // Clean up any placeholders that didn't get a URL
+    const finalDbImageArray = finalImageOrder.map(item => 
+      item === 'NEW_FILE_PLACEHOLDER' && newUrlIndex < newUploadedUrls.length 
+        ? newUploadedUrls[newUrlIndex++] 
+        : item
+    ).filter(item => item !== 'NEW_FILE_PLACEHOLDER');
 
     updateData.images = finalDbImageArray;
   }
 
-  // --- Step 3: Handle Video Update (Replaces old one if it exists) ---
+  // --- Step 3: Handle Video Update (Your existing logic is fine) ---
   const videoFile = req.files?.video?.[0];
   if (videoFile) {
     const videoUploadResult = await uploadOnS3(videoFile.path, "products");
@@ -403,7 +432,7 @@ const updateProduct = asyncHandler(async (req, res) => {
     }
   }
   
-  // Step 4: Execute the Update
+  // --- Step 4: Execute the Update ---
   const updatedProduct = await Product.findByIdAndUpdate(
     productId,
     { $set: updateData, $unset: unsetData },
@@ -416,7 +445,6 @@ const updateProduct = asyncHandler(async (req, res) => {
 
   return res.status(200).json(new ApiResponse(200, updatedProduct, "Product updated successfully."));
 });
-
 
 
 const deleteProduct = asyncHandler(async (req, res) => {

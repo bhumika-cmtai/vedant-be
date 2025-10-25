@@ -1,6 +1,6 @@
 import { Order } from "../models/order.model.js";
 import Product from "../models/product.model.js";
-import {shiprocketApi} from "../utils/shiprocketService.js";
+import { shiprocketApi } from "../utils/shiprocketService.js";
 
 /**
  * @description Creates an order in Shiprocket using a locally saved order.
@@ -16,9 +16,8 @@ export const createShiprocketOrder = async (order, userEmail) => {
         let maxBreadth = 0;
         let maxHeight = 0;
 
-
         for (const item of order.orderItems) {
-            const product = Product.find(p => p._id.toString() === item.product_id.toString());
+            const product = await Product.findById(item.product_id); // Corrected line
             if (!product) continue;
 
             if (item.sku_variant) {
@@ -36,6 +35,11 @@ export const createShiprocketOrder = async (order, userEmail) => {
                 maxHeight = Math.max(maxHeight, product.height || 10);
             }
         }
+        console.log("-----product specifications-----")
+        console.log(totalWeight)
+        console.log(maxLength)
+        console.log(maxBreadth)
+        console.log(maxHeight)
 
         const orderPayload = {
             order_id: order._id.toString(),
@@ -117,7 +121,10 @@ export const createShiprocketOrder = async (order, userEmail) => {
         console.log(`Order ${order._id} fully automated and marked as Shipped.`);
         
     } catch (error) {
+        
         console.error(`CRITICAL ERROR during Shiprocket automation for local order ${order._id}.`);
+        console.log("--------errrorrrr---------")
+        console.log(error)
         console.error("Error Response:", error.response?.data || error.message);
     }
-};
+}
