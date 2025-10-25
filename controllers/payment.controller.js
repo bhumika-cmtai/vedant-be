@@ -14,6 +14,7 @@ import { sendOrderConfirmationEmail,sendServiceNotificationToAdmin  } from "../s
 import { createShiprocketOrder } from "../services/shippingService.js";
 import { WalletConfig } from "../models/walletConfig.model.js";
 import { TaxConfig } from "../models/taxConfig.model.js";
+// import { getShippingRates, createShiprocketOrder } from '../services/shippingService.js';
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -113,6 +114,7 @@ const razorpay = new Razorpay({
 
 
 // Helper function for Razorpay refunds
+
 const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
   try {
     // --- FIX APPLIED HERE ---
@@ -142,18 +144,23 @@ const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
   const { addressId, couponCode, pointsToRedeem,shippingPrice  } = req.body;
 
-  if (!addressId) {
-    throw new ApiError(400, "An Address ID is required to create an order.");
-  }
+  // if (!addressId) {
+  //   throw new ApiError(400, "An Address ID is required to create an order.");
+  // }
 
   const user = await User.findById(req.user._id)
     .populate({
       path: "cart.product",
-      select: "name stock_quantity variants" // Simplified select
+      select: "name stock_quantity variants type" // Simplified select
     });
     
   if (!user || !user.cart.length) {
     throw new ApiError(400, "Your cart is empty.");
+  }
+
+  const containsPhysicalProduct = user.cart.some(item => item.product.type === 'product');
+  if (containsPhysicalProduct && !addressId) {
+      throw new ApiError(400, "An Address ID is required for orders with physical products.");
   }
 
   let backendSubtotal = 0;
@@ -161,23 +168,18 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     if (!item.product) throw new ApiError(404, "A product in your cart is unavailable.");
     
     // --- Stock Validation Block ---
-    if (item.sku_variant) {
-        // --- FIX #1: Correctly find the variant using 'sku' ---
-        // The field in the Product model is 'sku', not 'sku_variant'.
-        const variant = item.product.variants.find(v => v.sku === item.sku_variant);
-        
-        if (!variant) {
-            // This error is now more accurate. It will trigger if data is mismatched.
-            throw new ApiError(400, `Variant for ${item.product.name} could not be found. Please try re-adding it to your cart.`);
-        }
-        if (variant.stock_quantity < item.quantity) {
-            throw new ApiError(400, `Not enough stock for ${item.product.name}. Only ${variant.stock_quantity} available.`);
-        }
-    } else {
-        if (item.product.stock_quantity < item.quantity) {
-            throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
-        }
-    }
+    if (item.product.type === 'product') {
+      if (item.sku_variant) {
+          const variant = item.product.variants.find(v => v.sku === item.sku_variant);
+          if (!variant || variant.stock_quantity < item.quantity) {
+              throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
+          }
+      } else {
+          if (item.product.stock_quantity < item.quantity) {
+              throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
+          }
+      }
+  }
     backendSubtotal += item.price * item.quantity;
   }
 
@@ -209,7 +211,9 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   const taxRate = taxConfig?.rate || 0; // Default to 0 if not configured
   const taxableAmount = Math.max(0, backendSubtotal - totalDiscount);
   const taxPrice = taxableAmount * taxRate;
-  const backendTotalAmount = taxableAmount + shippingPrice + taxPrice;
+  const finalShippingPrice = containsPhysicalProduct ? (shippingPrice || 0) : 0;
+  const backendTotalAmount = taxableAmount + finalShippingPrice + taxPrice;
+
 
   const razorpayOrder = await razorpay.orders.create({
     amount: Math.round(backendTotalAmount * 100), 
@@ -229,12 +233,10 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   }, "Razorpay order created successfully."));
 });
 
-
-
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId, couponCode, pointsToRedeem, serviceInputs, shippingPrice   } = req.body;
 
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !addressId) {
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
     throw new ApiError(400, "Missing required payment or address details.");
   }
 
@@ -257,8 +259,13 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
     if (!user?.cart?.length) throw new ApiError(400, "Cannot place order with an empty cart.");
     
-    const selectedAddress = user.addresses.id(addressId);
-    if (!selectedAddress) throw new ApiError(404, "Selected address not found.");
+    const containsPhysicalProduct = user.cart.some(item => item.product.type === 'product');
+    let selectedAddress = null;
+    if (containsPhysicalProduct) {
+        if (!addressId) throw new ApiError(400, "Address ID is required for physical products.");
+        selectedAddress = user.addresses.id(addressId);
+        if (!selectedAddress) throw new ApiError(404, "Selected address not found.");
+    }
 
     let subtotal = 0;
     const orderItems = [];
@@ -279,6 +286,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
       orderItems.push({
         product_id: item.product._id,
         product_name: item.product.name,
+        product_type: item.product.type, 
         quantity: item.quantity,
         price_per_item: item.price,
         image: item.image || item.product.images[0],
@@ -286,30 +294,28 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         userInput: userInputData, 
       });
 
-      if (item.sku_variant) {
-        // --- FIX 1: Correctly find the variant using 'sku' ---
-        const productVariant = item.product.variants.find(v => v.sku === item.sku_variant);
-        
-        if (!productVariant) throw new ApiError(400, `Variant for "${item.product.name}" is no longer available.`);
-        if (productVariant.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}". Only ${productVariant.stock_quantity} left.`);
-        
-        // --- FIX 2: Correctly filter for the update using 'sku' ---
-        stockUpdateOperations.push({
-          updateOne: {
-            filter: { _id: item.product._id, "variants.sku": item.sku_variant },
-            update: { $inc: { "variants.$.stock_quantity": -item.quantity } },
-          },
-        });
-      } else {
-        if (item.product.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}". Only ${item.product.stock_quantity} left.`);
-        stockUpdateOperations.push({
-          updateOne: {
-            filter: { _id: item.product._id },
-            update: { $inc: { stock_quantity: -item.quantity } },
-          },
-        });
-      }
+      if (item.product.type === 'product') {
+        if (item.sku_variant) {
+          const variant = item.product.variants.find(v => v.sku === item.sku_variant);
+          if (!variant || variant.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
+          stockUpdateOperations.push({
+            updateOne: {
+              filter: { _id: item.product._id, "variants.sku": item.sku_variant },
+              update: { $inc: { "variants.$.stock_quantity": -item.quantity } },
+            },
+          });
+        } else {
+          if (item.product.stock_quantity < item.quantity) throw new ApiError(400, `Not enough stock for "${item.product.name}".`);
+          stockUpdateOperations.push({
+            updateOne: {
+              filter: { _id: item.product._id },
+              update: { $inc: { stock_quantity: -item.quantity } },
+            },
+          });
+        }
     }
+  }
+
 
     if (orderItems.length === 0) throw new ApiError(400, "No valid items to place order.");
 
@@ -339,7 +345,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
           const totalDiscount = couponDiscount + walletDiscount;
     
           // --- Final Price Calculation (Correct) ---
-          const shippingPrice = 90;
+          // const shippingPrice = 90;
           const taxConfig = await TaxConfig.findOne().session(session).lean();
           if (!taxConfig) {
               // Yeh ek fallback hai, agar DB mein koi config nahi hai to error dega.
@@ -352,7 +358,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     const [newOrder] = await Order.create([{
       user: req.user._id,
       orderItems,
-      shippingAddress: selectedAddress.toObject(),
+      shippingAddress: selectedAddress ? selectedAddress.toObject() : undefined,
       itemsPrice: subtotal,
       shippingPrice, 
       taxPrice,
@@ -365,27 +371,39 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
       orderStatus: "Paid", // The order is paid and ready to be processed
   }], { session });
 
+  if (stockUpdateOperations.length > 0) {
     await Product.bulkWrite(stockUpdateOperations, { session });
-    user.cart = [];
-    await user.save({ session, validateBeforeSave: false });
-
-    await session.commitTransaction();
-    
-    await createShiprocketOrder(newOrder, user.email);
-
-    if (user.email) {
-      sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
-    }
-
-    sendServiceNotificationToAdmin(newOrder).catch(err => console.error("Failed to send admin service notification:", err));
-
-    res.status(201).json(new ApiResponse(201, { order: newOrder }, "Payment verified & order placed successfully."));
-  } catch (error) {
-    await session.abortTransaction();
-    throw error;
-  } finally {
-    session.endSession();
   }
+  user.cart = [];
+  await user.save({ session, validateBeforeSave: false });
+
+  await session.commitTransaction();
+  
+  // --- POST-ORDER ACTIONS (After successful transaction) ---
+  const containsService = orderItems.some(item => item.product_type === 'service');
+
+  // 1. Send to Shiprocket if there's a physical item
+  if (containsPhysicalProduct) {
+    await createShiprocketOrder(newOrder, user.email);
+  }
+
+  // 2. Send notification to admin if there's a service item
+  if (containsService) {
+    sendServiceNotificationToAdmin(newOrder).catch(err => console.error("Failed to send admin service notification:", err));
+  }
+
+  // 3. Send confirmation to user for ALL orders
+  if (user.email) {
+    sendOrderConfirmationEmail(user.email, newOrder).catch(err => console.error("Failed to send email:", err));
+  }
+
+  res.status(201).json(new ApiResponse(201, { order: newOrder }, "Payment verified & order placed successfully."));
+} catch (error) {
+  await session.abortTransaction();
+  throw error;
+} finally {
+  session.endSession();
+}
 });
 
 export const cancelOrder = asyncHandler(async (req, res) => {

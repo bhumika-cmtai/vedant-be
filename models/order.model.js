@@ -38,10 +38,10 @@ const orderSchema = new mongoose.Schema(
     ],
     shippingAddress: {
       type: shippingAddressSchema,
-      required: true,
+      // required: true,
     },
     itemsPrice: { type: Number, required: true },
-    shippingPrice: { type: Number, required: true },
+    shippingPrice: { type: Number },
     taxPrice: { type: Number, required: true },
     discountAmount: { type: Number, default: 0 }, 
     couponCode: { type: String }, 
